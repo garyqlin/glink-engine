@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Glink Dashboard — v0.4</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'SF Mono', 'Menlo', monospace; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; gap: 20px; }
+.header h1 { font-size: 18px; color: #58a6ff; }
+.header .project-name { color: #8b949e; font-size: 13px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; animation: pulse 2s infinite; }
+.live-dot.offline { background: #f85149; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+.card-header { background: #1c2128; padding: 10px 16px; border-bottom: 1px solid #30363d; font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
+.card-body { padding: 12px 16px; }
+.progress-wrap { margin-bottom: 4px; }
+.progress-bar-bg { background: #21262d; border-radius: 4px; height: 8px; overflow: hidden; }
+.progress-bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #1f6feb, #58a6ff); transition: width 0.5s ease; }
+.progress-meta { display: flex; justify-content: space-between; font-size: 11px; color: #8b949e; margin-top: 4px; }
+.step-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+.step-item:last-child { border-bottom: none; }
+.step-num { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; flex-shrink: 0; }
+.step-num.wait { background: #30363d; color: #8b949e; }
+.step-num.run  { background: #1f6feb; color: #fff; }
+.step-num.ok   { background: #238636; color: #fff; }
+.step-num.fail { background: #da3633; color: #fff; }
+.step-num.skip { background: #9e6a03; color: #fff; }
+.step-name { flex: 1; }
+.step-agent { font-size: 11px; color: #8b949e; }
+.step-time { font-size: 11px; color: #484f58; }
+.agent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.agent-item { background: #21262d; border-radius: 6px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
+.agent-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.agent-dot.online  { background: #3fb950; }
+.agent-dot.offline { background: #f85149; }
+.agent-name { font-size: 12px; flex: 1; }
+.agent-port { font-size: 10px; color: #484f58; }
+.event-list { max-height: 300px; overflow-y: auto; }
+.event-item { padding: 5px 0; border-bottom: 1px solid #21262d; font-size: 11px; display: flex; gap: 8px; }
+.event-item:last-child { border-bottom: none; }
+.event-ts { color: #484f58; flex-shrink: 0; }
+.event-type { flex: 1; }
+.event-agent { color: #58a6ff; }
+.status-ok   { color: #3fb950; }
+.status-fail  { color: #f85149; }
+.status-wait  { color: #8b949e; }
+.status-run   { color: #58a6ff; }
+.status-skip  { color: #d29922; }
+.right-col { display: flex; flex-direction: column; gap: 16px; }
+.error-box { background: #2d1114; border: 1px solid #f8514966; border-radius: 6px; padding: 10px; font-size: 12px; color: #f85149; display: none; }
+.error-box.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="live-dot" id="liveDot"></div>
+  <h1>⚡ Glink Dashboard</h1>
+  <span class="project-name" id="projectName">—</span>
+  <span style="margin-left:auto;font-size:12px;color:#484f58" id="lastUpdate">—</span>
+</div>
+
+<div class="main">
+  <div class="left-col">
+    <!-- 进度卡片 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">📊 项目进度</div>
+      <div class="card-body">
+        <div class="progress-wrap">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="progress-meta">
+          <span id="progressText">0 / 0 steps</span>
+          <span id="runTime">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 列表 -->
+    <div class="card">
+      <div class="card-header">📋 工作流 Steps</div>
+      <div class="card-body" id="stepList">Loading...</div>
+    </div>
+  </div>
+
+  <div class="right-col">
+    <!-- 错误告警 -->
+    <div class="error-box" id="errorBox"></div>
+
+    <!-- 战甲状态 -->
+    <div class="card">
+      <div class="card-header">🤖 战甲状态</div>
+      <div class="card-body">
+        <div class="agent-grid" id="agentGrid">Loading...</div>
+      </div>
+    </div>
+
+    <!-- 实时事件 -->
+    <div class="card">
+      <div class="card-header">📡 实时事件流</div>
+      <div class="card-body">
+        <div class="event-list" id="eventList">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 配置 ──────────────────────────────────────────────
+const DAEMON_HOST = 'http://127.0.0.1';
+const DAEMON_PORT = 8426;  // Glink daemon 端口（后续可改为动态探测）
+const REFRESH_MS  = 2000;
+
+const AGENT_PORTS = {
+  '标准版': 8420, '重锤': 8431, '绘墨': 8432,
+  '大黄蜂': 8434, 'Laser': 8435,
+  'Hermes': 8440, '扎古': 8420, '橘子': 8420
+};
+
+// ── 工具函数 ──────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = n => String(n).padStart(2, '0');
+
+function statusLabel(type) {
+  const m = {
+    'task.started':   ['run',  '🔄 启动'],
+    'task.completed': ['ok',   '✅ 完成'],
+    'task.failed':    ['fail', '❌ 失败'],
+    'task.skipped':   ['skip', '⏭️ 跳过'],
+    'task.waiting':   ['wait', '⏳ 等待'],
+    'project.started':['run',  '🚀 开始'],
+    'project.done':   ['ok',   '🏁 结束'],
+    'project.update': ['run',  '📝 更新'],
+  };
+  const [cls, label] = m[type] || ['wait', type];
+  return `<span class="step-num ${cls}">${label}</span>`;
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+}
+
+// ── 拉取 Bus 数据 ────────────────────────────────────
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    return await r.json();
+  } catch { return null; }
+}
+
+// ── 健康检查所有 agent ────────────────────────────────
+async function checkAgents() {
+  const checks = Object.entries(AGENT_PORTS).map(async ([name, port]) => {
+    const online = await fetchJSON(`${DAEMON_HOST}:${port}/health`) !== null;
+    return { name, port, online };
+  });
+  return Object.fromEntries((await Promise.all(checks)).map(a => [a.name, a]));
+}
+
+// ── 渲染 ─────────────────────────────────────────────
+function renderAgents(agents) {
+  const grid = $('agentGrid');
+  const uniq = {};
+  for (const [name, data] of Object.entries(agents)) {
+    if (!uniq[name]) uniq[name] = data;
+  }
+  grid.innerHTML = Object.values(uniq).map(a => `
+    <div class="agent-item">
+      <div class="agent-dot ${a.online ? 'online' : 'offline'}"></div>
+      <span class="agent-name">${escapeHtml(a.name)}</span>
+      <span class="agent-port">:${a.port}</span>
+    </div>`).join('');
+
+  // 顶栏 live dot
+  const anyOnline = Object.values(uniq).some(a => a.online);
+  $('liveDot').className = 'live-dot' + (anyOnline ? '' : ' offline');
+}
+
+function renderSteps(status) {
+  const steps = status.steps || [];
+  const list = $('stepList');
+  if (!steps.length) { list.innerHTML = '<span style="color:#484f58">暂无步骤数据</span>'; return; }
+
+  list.innerHTML = steps.map(s => `
+    <div class="step-item">
+      <span class="step-num ${s.status_class || 'wait'}">${s.index}</span>
+      <span class="step-name">${escapeHtml(s.name)}</span>
+      <span class="step-agent">${escapeHtml(s.agent || '—')}</span>
+      <span class="step-time">${escapeHtml(s.duration || '—')}</span>
+    </div>`).join('');
+
+  // 进度条
+  const done = steps.filter(s => s.status_class === 'ok' || s.status_class === 'skip').length;
+  const pct  = Math.round((done / steps.length) * 100);
+  $('progressFill').style.width = pct + '%';
+  $('progressText').textContent = `${done} / ${steps.length} steps`;
+  $('projectName').textContent = status.project_name || '—';
+}
+
+function renderEvents(events) {
+  const list = $('eventList');
+  if (!events.length) { list.innerHTML = '<span style="color:#484f58">暂无事件</span>'; return; }
+  list.innerHTML = events.map(e => `
+    <div class="event-item">
+      <span class="event-ts">${escapeHtml(e.ts?.slice(11,19) || '')}</span>
+      <span class="event-type ${'status-'+(e.status_class||'wait')}">${escapeHtml(e.type)}</span>
+      <span class="event-agent">${escapeHtml(e.agent)}</span>
+    </div>`).join('');
+}
+
+function renderError(msg) {
+  const box = $('errorBox');
+  if (!msg) { box.className = 'error-box'; return; }
+  box.className = 'error-box show';
+  box.textContent = '⚠️ ' + msg;
+}
+
+// ── 主循环 ────────────────────────────────────────────
+let runStart = null;
+
+async function refresh() {
+  $('lastUpdate').textContent = new Date().toLocaleTimeString('zh-CN');
+
+  const [status, agents, events] = await Promise.all([
+    fetchJSON(`${DAEMON_HOST}:${DAEMON_PORT}/status`),
+    checkAgents(),
+    fetchJSON(`${DAEMON_HOST}:${DAEMON_PORT}/status/events?n=20`),
+  ]);
+
+  if (status) {
+    renderSteps(status);
+    renderError(status.error || null);
+    if (!runStart && status.run_start) runStart = new Date(status.run_start);
+    if (runStart) {
+      const secs = Math.round((Date.now() - runStart) / 1000);
+      $('runTime').textContent = `⏱ ${Math.floor(secs/60)}m ${secs%60}s`;
+    }
+  }
+
+  if (agents) renderAgents(agents);
+  if (events) renderEvents(events);
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

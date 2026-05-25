@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试 — 沙盒游戏加载</title>
+</head>
+<body>
+  <div id="canvas-container" style="position:fixed;inset:0;z-index:1;"></div>
+  <div id="start-menu" style="position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.78);">
+    <button onclick="window.startGame()" style="padding:14px 48px;font-size:18px;">▶ 开始建造</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js" onload="console.log('CANNON loaded:', typeof window.CANNON)"></script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    console.log('THREE loaded:', typeof THREE);
+    console.log('CANNON:', typeof CANNON);
+    
+    const CANNON = window.CANNON;
+    console.log('CANNON after window access:', typeof CANNON);
+    
+    // 初始化
+    const container = document.getElementById('canvas-container');
+    console.log('Container:', container);
+    
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(20, 15, 20);
+    camera.lookAt(0, 0, 0);
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+    
+    // 添加一些方块
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x4CAF50 });
+    const cube = new THREE.Mesh(geo, mat);
+    cube.position.set(0, 0.5, 0);
+    scene.add(cube);
+    
+    // 光线
+    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambient);
+    const dirLight = new THREE.DirectionalLight(0xffffee, 0.8);
+    dirLight.position.set(50, 100, 50);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+    
+    // 动画
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+    console.log('✅ 场景初始化完成');
+    
+    // 导出 startGame
+    window.startGame = function() {
+      document.getElementById('start-menu').style.display = 'none';
+      console.log('✅ 点击了开始游戏');
+    };
+    
+    window.addEventListener('error', (e) => {
+      console.error('💥 ERROR:', e.message, e.filename, e.lineno);
+    });
+    
+    console.log('✅ 一切就绪，等待点击');
+  </script>
+</body>
+</html>

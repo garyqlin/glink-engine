@@ -1,0 +1,53 @@
+# ══════════════════════════════════════════════════════════
+# Glink Daemon 配置文件
+# 优先级：glink-config.yaml > 环境变量 > 默认值
+# ══════════════════════════════════════════════════════════
+
+# ── 项目 ────────────────────────────────────────────────
+project:
+  # 默认加载的工作流项目（也可通过命令行参数或 GLINK_DEFAULT_PROJECT 设置）
+  default: sandbox-builder
+
+# ── 调度 ─────────────────────────────────────────────────
+scheduling:
+  # 步骤重试次数（默认 2）
+  max_retries: 2
+  # 依赖检查轮询间隔（秒）
+  poll_interval: 3
+  # 依赖检查超时（秒）
+  poll_max_wait: 180
+  # 末尾步骤保留数（P2：未来支持并行时会参考此限制）
+  max_concurrent_steps: 1  # 1=串行
+
+# ── 汇报 ─────────────────────────────────────────────────
+reporting:
+  # 渠道列表。支持：console / feishu / silent
+  # 多路配置时会自动创建 MultiReporter
+  channels:
+    - type: console
+      label: "Glink"
+
+    # 启用飞书推送时取消注释并配置 webhook
+    # - type: feishu
+    #   webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+    #   label: "Fairy"  # 可选，默认 "Glink"
+
+  # 告警级别阈值：green / yellow / red
+  # 低于此级别的告警会被静默
+  min_alert_severity: yellow
+
+# ── API 服务器 ────────────────────────────────────────────
+server:
+  host: "127.0.0.1"
+  port: 8426
+  # SSE 心跳间隔（秒）
+  sse_heartbeat: 60
+  # SSE 轮询间隔（秒）
+  sse_poll_interval: 2
+
+# ── 安全 ─────────────────────────────────────────────────
+security:
+  # pidfile 路径（默认自动推导）
+  pidfile: ""
+  # 进程启动超时（秒）
+  startup_timeout: 10

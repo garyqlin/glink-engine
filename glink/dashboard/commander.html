@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>前线战报 · Glink 指挥官看板</title>
+<style>
+/* ══════════════════════════════════════════════════════
+   DARK TERMINAL UI — 前指战报屏
+   ══════════════════════════════════════════════════════ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'SF Mono', 'Menlo', 'Cascadia Code', monospace;
+  background: #0a0e14;
+  color: #b3b8c3;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── 顶栏 ──────────────────────────────────────────── */
+.header {
+  background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+  border-bottom: 1px solid #30363d;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header h1 { font-size: 16px; color: #58a6ff; letter-spacing: 2px; }
+.header .project-badge {
+  background: #1c2128;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #8b949e;
+  border: 1px solid #30363d;
+}
+.live-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #3fb950;
+  animation: pulse 1.5s infinite;
+}
+.live-dot.offline { background: #f85149; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 14px; font-size: 11px; color: #484f58; }
+
+/* ── 主布局 ────────────────────────────────────────── */
+.main { display: flex; gap: 0; height: calc(100vh - 46px); }
+
+/* 左半 — 中心战况 */
+.center-panel {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+  border-right: 1px solid #21262d;
+}
+.center-panel::-webkit-scrollbar { width: 4px; }
+.center-panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+/* 右半 — 情报侧栏 */
+.side-panel {
+  width: 400px;
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── 概览条 ────────────────────────────────────────── */
+.overview-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.overview-item {
+  flex: 1;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.overview-label { font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 1px; }
+.overview-value { font-size: 22px; font-weight: bold; margin-top: 2px; }
+.overview-value.ok  { color: #3fb950; }
+.overview-value.run { color: #58a6ff; }
+.overview-value.wait{ color: #8b949e; }
+.overview-value.fail{ color: #f85149; }
+
+/* ── Step 战区卡片 ─────────────────────────────────── */
+.step-zone {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.step-zone:hover { border-color: #30363d; }
+.step-zone.running { border-color: #1f6feb; box-shadow: 0 0 8px rgba(31,111,235,0.15); }
+.step-zone.failed  { border-color: #da3633; box-shadow: 0 0 8px rgba(218,54,51,0.15); }
+.step-zone.ok      { border-color: #23863655; }
+
+.step-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  gap: 10px;
+  user-select: none;
+}
+.step-header:hover { background: #161b2222; }
+
+.step-num {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: bold; flex-shrink: 0;
+}
+.step-num.wait  { background: #21262d; color: #484f58; }
+.step-num.run   { background: #1f6feb; color: #fff; box-shadow: 0 0 6px #1f6feb88; }
+.step-num.ok    { background: #238636; color: #fff; }
+.step-num.fail  { background: #da3633; color: #fff; }
+.step-num.skip  { background: #9e6a03; color: #fff; }
+
+.step-title { flex: 1; font-size: 13px; }
+.step-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  white-space: nowrap;
+}
+.step-badge.run  { background: #1f6feb33; color: #58a6ff; border: 1px solid #1f6feb55; }
+.step-badge.ok   { background: #23863633; color: #3fb950; border: 1px solid #23863655; }
+.step-badge.fail { background: #da363333; color: #f85149; border: 1px solid #da363355; }
+.step-badge.wait { background: #21262d;  color: #484f58; border: 1px solid #30363d; }
+
+.step-agent { font-size: 11px; color: #8b949e; }
+.step-duration { font-size: 11px; color: #484f58; }
+
+/* Step 详情（可折叠） */
+.step-detail {
+  display: none;
+  padding: 8px 12px 12px;
+  border-top: 1px solid #21262d;
+  background: #0a0e14;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.step-detail.open { display: block; }
+
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-bottom: 8px; }
+.detail-row { display: flex; gap: 6px; }
+.detail-label { color: #484f58; min-width: 60px; }
+.detail-value { color: #b3b8c3; word-break: break-all; }
+
+.detail-section { margin-top: 6px; padding-top: 6px; border-top: 1px solid #21262d; }
+.detail-section-title { font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.preview-box {
+  background: #0d1117; border: 1px solid #21262d;
+  border-radius: 4px; padding: 6px 8px;
+  font-size: 11px; color: #8b949e;
+  max-height: 80px; overflow-y: auto; margin-top: 4px;
+}
+.preview-box::-webkit-scrollbar { width: 3px; }
+.preview-box::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+.error-list { margin: 4px 0; }
+.error-item { color: #f85149; padding: 2px 0; }
+
+/* ── 侧栏控件 ──────────────────────────────────────── */
+.side-card {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 10px;
+}
+.side-card-title {
+  font-size: 10px; color: #484f58;
+  text-transform: uppercase; letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+/* 战甲状态（格子布局） */
+.agent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.agent-item {
+  background: #0d1117; border: 1px solid #21262d;
+  border-radius: 4px; padding: 6px 8px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px;
+}
+.agent-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.agent-dot.online { background: #3fb950; box-shadow: 0 0 4px #3fb95088; }
+.agent-dot.offline { background: #f85149; }
+.agent-label { flex: 1; }
+.agent-port { font-size: 10px; color: #484f58; }
+.agent-icon { font-size: 14px; }
+
+/* 事件流 */
+.event-stream {
+  max-height: 260px; overflow-y: auto;
+  font-size: 11px;
+}
+.event-stream::-webkit-scrollbar { width: 3px; }
+.event-stream::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.event-line {
+  padding: 2px 0;
+  border-bottom: 1px solid #1c2128;
+  display: flex; gap: 6px;
+}
+.event-line:last-child { border-bottom: none; }
+.event-ts { color: #484f58; flex-shrink: 0; }
+.event-type { flex: 1; }
+.event-agent { color: #58a6ff; }
+.ev-ok  { color: #3fb950; }
+.ev-run { color: #58a6ff; }
+.ev-fail{ color: #f85149; }
+.ev-skip{ color: #d29922; }
+.ev-wait{ color: #8b949e; }
+
+/* 操作面板 */
+.action-grid { display: flex; gap: 6px; flex-wrap: wrap; }
+.action-btn {
+  background: #21262d; border: 1px solid #30363d;
+  color: #8b949e; padding: 5px 10px; border-radius: 4px;
+  font-size: 11px; font-family: inherit;
+  cursor: pointer; transition: all 0.15s;
+}
+.action-btn:hover {
+  background: #1f6feb33; border-color: #1f6feb; color: #58a6ff;
+}
+.action-btn.danger:hover {
+  background: #da363333; border-color: #da3633; color: #f85149;
+}
+
+/* ── 命令输入 ──────────────────────────────────────── */
+.cmd-bar {
+  display: flex; gap: 4px; margin-top: 4px;
+}
+.cmd-input {
+  flex: 1;
+  background: #0d1117; border: 1px solid #30363d;
+  color: #b3b8c3; padding: 5px 8px; border-radius: 4px;
+  font-size: 11px; font-family: inherit;
+}
+.cmd-input:focus { outline: none; border-color: #58a6ff; }
+.cmd-output {
+  background: #0d1117; border: 1px solid #21262d;
+  border-radius: 4px; padding: 6px 8px;
+  font-size: 11px; color: #8b949e;
+  max-height: 80px; overflow-y: auto;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+/* ── 通知弹窗 ──────────────────────────────────────── */
+.toast {
+  position: fixed; top: 54px; right: 12px;
+  padding: 8px 16px; border-radius: 6px;
+  font-size: 12px; z-index: 999;
+  animation: slideIn 0.3s ease;
+  pointer-events: none;
+}
+.toast-ok  { background: #238636; color: #fff; border: 1px solid #3fb950; }
+.toast-err { background: #da3633; color: #fff; border: 1px solid #f85149; }
+.toast-info{ background: #1f6feb; color: #fff; border: 1px solid #58a6ff; }
+@keyframes slideIn { from { opacity:0; transform: translateX(20px); } to { opacity:1; transform: translateX(0); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="live-dot" id="liveDot"></div>
+  <h1>⚡ 前线战报 · Glink</h1>
+  <span class="project-badge" id="projectBadge">—</span>
+  <span class="header-right">
+    <span>🔄 <span id="refreshCount">0</span></span>
+    <span>📡 <span id="sseStatus">断连</span></span>
+    <span>⏱ <span id="runClock">00:00</span></span>
+  </span>
+</div>
+
+<div class="main">
+
+  <!-- ═══ 左：中心战况 ═══ -->
+  <div class="center-panel" id="centerPanel">
+
+    <!-- 概览条 -->
+    <div class="overview-bar" id="overviewBar">
+      <div class="overview-item">
+        <div class="overview-label">总步数</div>
+        <div class="overview-value" id="ovTotal">0</div>
+      </div>
+      <div class="overview-item">
+        <div class="overview-label">已完成</div>
+        <div class="overview-value ok" id="ovDone">0</div>
+      </div>
+      <div class="overview-item">
+        <div class="overview-label">进行中</div>
+        <div class="overview-value run" id="ovRunning">0</div>
+      </div>
+      <div class="overview-item">
+        <div class="overview-label">失败</div>
+        <div class="overview-value fail" id="ovFailed">0</div>
+      </div>
+      <div class="overview-item">
+        <div class="overview-label">等待中</div>
+        <div class="overview-value wait" id="ovWait">0</div>
+      </div>
+    </div>
+
+    <!-- Step 列表（由 JS 动态渲染） -->
+    <div id="stepZoneList"></div>
+  </div>
+
+  <!-- ═══ 右：情报侧栏 ═══ -->
+  <div class="side-panel" id="sidePanel">
+
+    <!-- 战甲状态 -->
+    <div class="side-card">
+      <div class="side-card-title">🤖 战甲在线</div>
+      <div class="agent-grid" id="agentGrid">加载中...</div>
+    </div>
+
+    <!-- 实时事件流 -->
+    <div class="side-card">
+      <div class="side-card-title">📡 实时事件流</div>
+      <div class="event-stream" id="eventStream">等待事件...</div>
+    </div>
+
+    <!-- 指挥操作台 -->
+    <div class="side-card">
+      <div class="side-card-title">🎮 指挥操作</div>
+      <div class="action-grid">
+        <button class="action-btn" onclick="runCmd('restart')">🔄 断点续跑</button>
+        <button class="action-btn danger" onclick="runCmd('restart?force=true')">💥 强制重跑</button>
+        <button class="action-btn" onclick="runCmd('restart?step=1')">⏮ 从头开始</button>
+        <button class="action-btn" onclick="openEventStream()">📡 重连 SSE</button>
+      </div>
+      <div class="cmd-bar">
+        <input class="cmd-input" id="cmdInput" placeholder="输入 GLINK 指令: restart / restart?step=N / status" onkeydown="if(event.key==='Enter')sendCmd(this.value)">
+        <button class="action-btn" onclick="sendCmd(document.getElementById('cmdInput').value)">▶</button>
+      </div>
+      <div class="cmd-output" id="cmdOutput"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════
+   Commander Dashboard — 前线指挥战报看板
+   ══════════════════════════════════════════════════════ */
+const DAEMON = 'http://127.0.0.1:8426';
+const SSE_URL = `${DAEMON}/events/stream`;
+const INTEL = `${DAEMON}/intel`;
+
+let refreshCount = 0;
+let runStart = null;
+let runTimer = null;
+let stepDetails = {}; // 缓存展开状态
+let agentsCache = {};
+let eventSource = null;
+
+// ── 工具函数 ────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const frag = html => { const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content; };
+const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const ts2time = ts => ts ? (ts.slice(11,19)) : '—';
+const formatSec = s => s ? `${Math.floor(s/60)}m ${s%60}s` : '—';
+
+function toast(msg, type='info') {
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+// ── API 调用 ────────────────────────────────────────────
+async function getJSON(url) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) {
+    console.warn('fetch error:', url, e.message);
+    return null;
+  }
+}
+
+// ── SSE 连接 ────────────────────────────────────────────
+function openEventStream() {
+  if (eventSource) { eventSource.close(); }
+  eventSource = new EventSource(SSE_URL);
+  $('sseStatus').textContent = '🟢 连接中';
+  $('sseStatus').style.color = '#d29922';
+
+  eventSource.addEventListener('status', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      renderAll(data);
+    } catch(err) { /* ignore */ }
+  });
+
+  eventSource.addEventListener('bus_event', (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      addEvent(ev);
+    } catch(err) { /* ignore */ }
+  });
+
+  eventSource.onopen = () => {
+    $('sseStatus').textContent = '🟢 实时';
+    $('sseStatus').style.color = '#3fb950';
+    toast('SSE 已连接', 'ok');
+  };
+
+  eventSource.onerror = () => {
+    $('sseStatus').textContent = '🔴 断连';
+    $('sseStatus').style.color = '#f85149';
+    setTimeout(openEventStream, 5000);
+  };
+}
+
+// ── 渲染主函数 ──────────────────────────────────────────
+function renderAll(status) {
+  if (!status) return;
+  refreshCount++;
+  $('refreshCount').textContent = refreshCount;
+
+  runStart = status.run_start || runStart;
+  if (runStart) {
+    if (runTimer) clearInterval(runTimer);
+    runTimer = setInterval(() => {
+      const secs = Math.round((Date.now() - new Date(runStart).getTime()) / 1000);
+      const m = String(Math.floor(secs/60)).padStart(2,'0');
+      const s = String(secs%60).padStart(2,'0');
+      $('runClock').textContent = `${m}:${s}`;
+    }, 1000);
+  }
+
+  renderOverview(status);
+  renderSteps(status);
+}
+
+function renderOverview(status) {
+  const steps = status.steps || [];
+  const total = steps.length;
+  let done = 0, run = 0, fail = 0, wait = 0;
+  steps.forEach(s => {
+    if (s.status_class === 'ok' || s.status_class === 'skip') done++;
+    else if (s.status_class === 'run' || s.status_class === 'running') run++;
+    else if (s.status_class === 'fail' || s.status_class === 'failed') fail++;
+    else wait++;
+  });
+  $('ovTotal').textContent = total;
+  $('ovDone').textContent = done;
+  $('ovRunning').textContent = run;
+  $('ovFailed').textContent = fail;
+  $('ovWait').textContent = wait;
+  $('projectBadge').textContent = status.project_name || '—';
+}
+
+function renderSteps(status) {
+  const steps = status.steps || [];
+  const list = $('stepZoneList');
+  if (!steps.length) { list.innerHTML = '<div style="color:#484f58;padding:20px;text-align:center">暂无步骤数据</div>'; return; }
+
+  let html = '';
+  steps.forEach((s, idx) => {
+    const isRunning = s.status_class === 'run' || s.status_class === 'running';
+    const isFailed  = s.status_class === 'fail' || s.status_class === 'failed';
+    const isOk      = s.status_class === 'ok';
+    const cls = isRunning ? 'running' : isFailed ? 'failed' : isOk ? 'ok' : '';
+
+    const numCls = s.status_class || 'wait';
+    const agent = s.agent || '—';
+    const dur = s.duration || '—';
+    const badgeMap = { 'ok':'🟢 完成','run':'🔄 执行中','fail':'🔴 失败','wait':'⏳ 等待','skip':'⏭ 跳过' };
+    const badge = badgeMap[s.status_class] || s.status_class;
+
+    const detailOpen = stepDetails[idx] || false;
+    const detailDisplay = detailOpen ? 'open' : '';
+
+    html += `
+    <div class="step-zone ${cls}">
+      <div class="step-header" onclick="toggleDetail(${idx})">
+        <span class="step-num ${numCls}">${idx+1}</span>
+        <span class="step-title">${esc(s.name)}</span>
+        <span class="step-agent">${esc(agent)}</span>
+        <span class="step-duration">${dur}</span>
+        <span class="step-badge ${numCls}">${badge}</span>
+      </div>
+      <div class="step-detail ${detailDisplay}" id="detail-${idx}">
+        <div style="color:#484f58;font-size:11px;text-align:center">正在加载详情...</div>
+      </div>
+    </div>`;
+  });
+  list.innerHTML = html;
+
+  // 异步加载详情（不阻塞主渲染）
+  steps.forEach((s, idx) => {
+    if (stepDetails[idx]) {
+      loadStepDetail(idx, s.stage);
+    }
+  });
+}
+
+async function loadStepDetail(idx, stage) {
+  const container = document.getElementById(`detail-${idx}`);
+  if (!container) return;
+
+  const data = await getJSON(`${INTEL}/step?stage=${encodeURIComponent(stage||'')}`);
+  if (!data) {
+    container.innerHTML = '<div style="color:#f85149">⚠ 无法获取详情</div>';
+    return;
+  }
+
+  const agentIcon = {'重锤':'🔨','绘墨':'🎨','大黄蜂':'🐝','Laser':'🔬','标准版':'🛡️','扎古':'🛡️','Forge':'⚒️','forge':'⚒️','代码臂':'⚒️'};
+  const icon = agentIcon[data.actual_agent||data.executor] || '🤖';
+
+  container.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-row"><span class="detail-label">战甲</span><span class="detail-value">${icon} ${esc(data.actual_agent||data.executor||'—')}</span></div>
+      <div class="detail-row"><span class="detail-label">端口</span><span class="detail-value">${esc(data.actual_agent ? (data.actual_agent==='标准版'?'8420':data.actual_agent==='扎古'?'8420':data.actual_agent==='重锤'?'8431':data.actual_agent==='绘墨'?'8432':data.actual_agent==='大黄蜂'?'8434':data.actual_agent==='Laser'?'8435':'—') : '—')}</span></div>
+      <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value">${data.status === 'ok' ? '🟢 完成' : data.status === 'running' ? '🔄 执行中' : data.status === 'failed' ? '🔴 失败' : '⏳ 等待'}</span></div>
+      <div class="detail-row"><span class="detail-label">耗时</span><span class="detail-value">${formatSec(data.duration_sec)} ${data.attempts > 1 ? ' ('+data.attempts+'次尝试)' : ''}</span></div>
+      <div class="detail-row"><span class="detail-label">开始</span><span class="detail-value">${data.run_start ? data.run_start.slice(11,19) : '—'}</span></div>
+      <div class="detail-row"><span class="detail-label">结束</span><span class="detail-value">${data.run_end ? data.run_end.slice(11,19) : '—'}</span></div>
+      <div class="detail-row"><span class="detail-label">输入文件</span><span class="detail-value" style="font-size:10px;word-break:break-all">${data.input_file ? esc(data.input_file) : '无'}</span></div>
+      <div class="detail-row"><span class="detail-label">输出文件</span><span class="detail-value" style="font-size:10px;word-break:break-all">${data.output_file ? esc(data.output_file) : '无'}</span></div>
+      <div class="detail-row"><span class="detail-label">可跳过</span><span class="detail-value">${data.optional ? '✅ 是' : '❌ 否'}</span></div>
+    </div>
+    ${data.description ? `<div class="detail-section"><div class="detail-section-title">📝 任务描述</div><div class="preview-box">${esc(data.description)}</div></div>` : ''}
+    ${data.output_preview ? `<div class="detail-section"><div class="detail-section-title">📤 产出预览</div><div class="preview-box">${esc(data.output_preview)}{data.output_preview.length > 500 ? '...' : ''}</div></div>` : ''}
+    ${data.errors && data.errors.length ? `<div class="detail-section"><div class="detail-section-title">❌ 错误记录 (${data.errors.length})</div><div class="error-list">${data.errors.map(e => `<div class="error-item">⚠ ${esc(e)}</div>`).join('')}</div></div>` : ''}
+  `;
+}
+
+function toggleDetail(idx) {
+  stepDetails[idx] = !stepDetails[idx];
+  const statusData = window._lastStatus;
+  if (statusData && statusData.steps && statusData.steps[idx]) {
+    loadStepDetail(idx, statusData.steps[idx].stage);
+  }
+  renderSteps(window._lastStatus);
+}
+
+// ── 事件流渲染 ──────────────────────────────────────────
+function addEvent(ev) {
+  const stream = $('eventStream');
+  const t = ev.type || '';
+  const clsMap = {'task.completed':'ev-ok','task.failed':'ev-fail','task.started':'ev-run','task.skipped':'ev-skip'};
+  const cls = clsMap[t] || 'ev-wait';
+  const iconMap = {'task.completed':'✅','task.failed':'❌','task.started':'🔄','task.skipped':'⏭'};
+  const icon = iconMap[t] || '📝';
+  const ts = ev.ts ? ev.ts.slice(11,19) : '--:--:--';
+
+  const line = document.createElement('div');
+  line.className = 'event-line';
+  line.innerHTML = `<span class="event-ts">${ts}</span><span class="event-type ${cls}">${icon} ${t}</span><span class="event-agent">${esc(ev.agent||'')}</span>`;
+  stream.insertBefore(line, stream.firstChild);
+
+  // 只保留 50 条
+  while (stream.children.length > 50) {
+    stream.removeChild(stream.lastChild);
+  }
+}
+
+// ── 战甲状态 ────────────────────────────────────────────
+async function refreshAgents() {
+  const data = await getJSON(`${INTEL}/agents`);
+  if (!data || !data.agents) return;
+  agentsCache = data.agents;
+
+  const grid = $('agentGrid');
+  grid.innerHTML = (data.agents || []).map(a => {
+    const dot = a.online ? 'online' : 'offline';
+    return `<div class="agent-item">
+      <div class="agent-dot ${dot}"></div>
+      <span class="agent-icon">${esc(a.label||'🤖')}</span>
+      <span class="agent-label">${esc(a.name)}</span>
+      <span class="agent-port">:${a.port}</span>
+    </div>`;
+  }).join('');
+
+  // 更新顶栏 live dot
+  const anyOnline = (data.agents || []).some(a => a.online);
+  $('liveDot').className = 'live-dot' + (anyOnline ? '' : ' offline');
+}
+
+// ── 指挥操作 ────────────────────────────────────────────
+async function runCmd(path) {
+  const res = await fetch(`${DAEMON}/${path}`, { method: 'POST' });
+  const text = await res.text();
+  toast(`${path} → ${res.ok ? '✅ 已执行' : '❌ 失败'}`, res.ok ? 'ok' : 'err');
+  $('cmdOutput').textContent = text.slice(0, 300);
+}
+
+function sendCmd(cmd) {
+  if (!cmd.trim()) return;
+  if (cmd.startsWith('restart')) {
+    runCmd(cmd.includes('?') ? cmd : 'restart');
+  } else if (cmd === 'status') {
+    getJSON(`${DAEMON}/status`).then(d => $('cmdOutput').textContent = JSON.stringify(d, null, 2).slice(0, 500));
+  } else {
+    $('cmdOutput').textContent = `未知指令: ${cmd}`;
+  }
+  document.getElementById('cmdInput').value = '';
+}
+
+// ── 轮询回退（SSE 连接前的兜底） ────────────────────────
+async function fallbackPoll() {
+  const status = await getJSON(`${DAEMON}/status`);
+  if (status) {
+    window._lastStatus = status;
+    renderAll(status);
+  }
+  await refreshAgents();
+}
+
+// ── 启动 ────────────────────────────────────────────────
+async function init() {
+  // 先轮询一次拿到数据
+  await fallbackPoll();
+  // 开 SSE
+  openEventStream();
+  // 轮询战甲状态（SSE 不推这个，需要额外轮询）
+  setInterval(refreshAgents, 5000);
+  // 兜底轮询：如果 SSE 断了，每 5 秒自动补救
+  setInterval(async () => {
+    if (!$('sseStatus') || $('sseStatus').textContent.includes('断连')) {
+      const status = await getJSON(`${DAEMON}/status`);
+      if (status) {
+        window._lastStatus = status;
+        renderAll(status);
+      }
+    }
+  }, 5000);
+}
+
+init();
+</script>
+</body>
+</html>
