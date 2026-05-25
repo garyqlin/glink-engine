@@ -50,7 +50,7 @@ from agent_client import call_agent as _call_agent
 from agent_client import load_workflow as _load_workflow
 from bus import sanitize_project_name as _sanitize
 
-from .config import get_max_retries, get_poll_interval, get_poll_max_wait
+from .config import get_max_concurrent_steps, get_max_retries, get_poll_interval, get_poll_max_wait
 
 MAX_RETRIES = get_max_retries()
 POLL_INTERVAL = get_poll_interval()
@@ -1126,7 +1126,13 @@ def _run_parallel(project_name, workflow, force_start=False, start_step=None):
         clear_checkpoint(project_name)
         return True
 
+    parallel_timeout = workflow.get("timeout", 600)  # 工作流级并行超时
+    step_timeout = workflow.get("step_timeout", 300)  # 单步超时（秒）
     log(f"并行执行 → {total} 步，从 Step-{start_index + 1} 开始")
+    log(
+        f"配置: max_concurrent={get_max_concurrent_steps()}, "
+        f"workflow_timeout={parallel_timeout}s, step_timeout={step_timeout}s"
+    )
 
     ready_queue, dep_map, step_map = _build_step_graph(steps)
 
@@ -1179,10 +1185,11 @@ def _run_parallel(project_name, workflow, force_start=False, start_step=None):
 
         return executor.submit(_run)
 
-    max_workers = min(len(steps), 4)
+    max_workers = min(len(steps), get_max_concurrent_steps())
     log(f"启动 ThreadPoolExecutor (max_workers={max_workers})")
 
     success = False
+    _parallel_start = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all initially ready steps
         for step_dict in ready_queue:
@@ -1192,6 +1199,13 @@ def _run_parallel(project_name, workflow, force_start=False, start_step=None):
 
         # Process futures as they complete
         while pending_futures and not cancel_event.is_set():
+            elapsed = time.time() - _parallel_start
+            if elapsed >= parallel_timeout:
+                log_err(f"并行执行超时 ({parallel_timeout}s)，{len(pending_futures)} 步未完成")
+                for pfut in list(pending_futures):
+                    pfut.cancel()
+                pending_futures.clear()
+                break
             done, _ = concurrent.futures.wait(
                 pending_futures.keys(),
                 return_when=concurrent.futures.FIRST_COMPLETED,

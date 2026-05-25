@@ -96,3 +96,8 @@ def get_poll_interval() -> int:
 
 def get_poll_max_wait() -> int:
     return get_config("scheduling.poll_max_wait", 180)
+
+
+def get_max_concurrent_steps() -> int:
+    """获取并行模式最大并发步数（默认 4）"""
+    return get_config("scheduling.max_concurrent_steps", 4)
