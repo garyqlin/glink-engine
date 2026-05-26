@@ -80,23 +80,23 @@ global_context: |
 
 steps:
   - id: step-1
-    executor: Hammer
+    executor: Agent A
     title: Scene setup
     description: Three.js scene + camera + lights + render loop
     output_file: projects/sandbox-builder/scene.html
 
   - id: step-2
-    executor: Hammer
+    executor: Agent A
     title: Block placement
     description: Raycasting + grid snap + 6 materials
     input_file: projects/sandbox-builder/scene.html
     output_file: projects/sandbox-builder/blocks.html
 
   - id: step-5
-    executor: Ink
+    executor: Agent B
     title: Glassmorphism UI
     description: Toolbar + score panel with backdrop-filter
-    fallback_agents: [Hammer, Default]
+    fallback_agents: [Agent A, Default]
     input_file: projects/sandbox-builder/blocks.html
     output_file: projects/sandbox-builder/ui.html
 ```
