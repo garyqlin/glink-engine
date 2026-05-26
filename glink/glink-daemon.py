@@ -49,15 +49,15 @@ project:
   goal: Build a Minecraft-style sandbox game
 steps:
   - id: step-1
-    executor: 重锤
-    fallback_agents: ["标准版"]
+    executor: hammer
+    fallback_agents: ["standard"]
     title: Scene Setup
     task: "Three.js scene + camera + lighting + render loop + OrbitControls"
     output_file: projects/sandbox-builder/sandbox-builder-step1.html
 
   - id: step-2
-    executor: 重锤
-    fallback_agents: ["标准版"]
+    executor: hammer
+    fallback_agents: ["standard"]
     title: Block Placement
     description: "Implement block placement/removal with raycasting"
     input_file: projects/sandbox-builder/sandbox-builder-step1.html
@@ -124,19 +124,16 @@ def _validate_plan_steps(steps: list, allow_shell: bool = False) -> list[str]:
 
         # P0-C: executor 白名单校验
         known_executors = {
-            "标准版",
-            "扎古",
-            "重锤",
-            "绘墨",
-            "大黄蜂",
+            "standard",
+            "hammer",
+            "ink",
+            "bumblebee",
             "Laser",
-            "代码臂",
             "Forge",
             "forge",
-            "standard",
         }
         for i, step in enumerate(steps):
-            executor = step.get("executor", "标准版")
+            executor = step.get("executor", "standard")
             if executor not in known_executors:
                 errors.append(f"Step {i + 1}: executor {executor!r} not in whitelist, falling back to 'standard'")
                 step["executor"] = "standard"
@@ -151,7 +148,7 @@ RULES (strict, no exceptions):
 1. Each step MUST have: id, executor, type (optional, default: regular), title, task
 2. Only use these fields per step: id, executor, fallback_agents, title, task, description, input_file, output_file, depends_on, type, optional, command (for shell type)
 3. For incremental builds: step-2 depends_on step-1, uses input_file/output_file
-4. Use executors by role: 重锤(engineering/coding), 绘墨(UI/design), 大黄蜂(testing), Laser(final QA)
+4. Use executors by role: hammer(engineering/coding), ink(UI/design), bumblebee(testing), Laser(final QA)
 5. First step: NO input_file or depends_on
 6. Last step: type: review for code review
 7. Add type: shell for command-only steps (use command field instead of task)
@@ -174,7 +171,7 @@ Name: {name}
 Generate the YAML now."""
 
     result = call_agent(
-        "标准版",
+        "standard",
         f"{_PLAN_SYSTEM_PROMPT}\n\n{prompt}",
         timeout=180,
     )

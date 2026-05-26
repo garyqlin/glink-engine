@@ -9,22 +9,22 @@ Glink is a lightweight orchestration engine that turns your AI agents into a **c
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                     Glink Engine                          │
-│                                                           │
-│   ┌────────┐  ┌────────┐  ┌──────────┐  ┌──────┐  ┌──────┐│
-│   │  Hammer │  │  Ink   │  │Bumblebee │  │Laser │  │Forge ││
-│   │ :8431   │  │ :8432  │  │  :8434   │  │:8435 │  │:8436 ││
-│   └───┬─────┘  └───┬────┘  └────┬──────┘  └──┬───┘  └──┬───┘│
-│       │            │            │            │          │    │
-│       └────────────┴────────────┴────────────┴──────────┘    │
-│                              │                               │
-│                     ┌────────▼────────┐                      │
-│                     │    Main Bus      │                      │
-│                     │ JSONL Blackboard │                      │
-│                     └─────────────────┘                      │
-│         Append-only timeline — every agent reads & writes     │
-└──────────────────────────────────────────────────────────┘
+                         ┌─────────────────────┐
+                         │ Your AI Agents       │
+                         │  (any LLM, any role) │
+                         └──────┬──────┬──────┬─┘
+                                │      │      │
+                     ┌──────────▼──────▼──────▼────────┐
+                     │        Main Bus                  │
+                     │     JSONL Blackboard             │
+                     └─────────────────────────────────┘
+         Append-only event log — every agent reads & writes
+
+     ┌─────────────────────────────────────────────────┐
+     │        Glink Engine (daemon + API)              │
+     │  Routes steps → picks agents → logs results     │
+     │  Checkpoints on every success → crash-survive   │
+     └─────────────────────────────────────────────────┘
 ```
 
 ---
@@ -64,7 +64,7 @@ open http://127.0.0.1:8426
 | **Dependency Graph** | Steps can `depends_on` each other; Glink handles ordering |
 | **Retry Loop** | Auto-retry failed steps (configurable, default 2×) |
 | **HTTP API + SSE** | Live status, agent health, and event stream on `:8426` |
-| **Healthcheck Cron** | Self-healing — daemon restarts on crash, alerts via Feishu |
+| **Healthcheck Cron** | Self-healing — daemon restarts on crash, alerts via webhook |
 | **Zero Deps** | One Python file + one JSONL file. No pip install needed |
 
 ---
@@ -105,14 +105,17 @@ steps:
 
 ## Agent Roster
 
-| Agent | Port | Specialty |
-|:------|:----:|:----------|
-| **Default / Zaku** | 8420 | Generalist, fallback for everything |
-| **Hammer** | 8431 | Backend, databases, engineering code |
-| **Ink** | 8432 | Frontend UI, visual design, CSS |
-| **Bumblebee** | 8434 | Data, search, persistence |
-| **Laser** | 8435 | Testing, validation, documentation |
-| **Forge** | 8436 | Code review, quality gate, code artistry |
+Define your own agents in `glink-daemon.py` — map each to a port, a name, and a specialty.
+
+```python
+AGENT_PORTS = {
+    "engineer":    "http://127.0.0.1:8431/ask",
+    "designer":    "http://127.0.0.1:8432/ask",
+    "tester":      "http://127.0.0.1:8433/ask",
+}
+```
+
+Workflow steps reference agents by name; the daemon assigns the work automatically.
 
 ---
 
@@ -140,4 +143,4 @@ Three.js sandbox game with physics, procedural textures, glassmorphism UI, save/
 
 ## License
 
-MIT © 2026 Opprime
+MIT
