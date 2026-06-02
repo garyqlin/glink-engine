@@ -1,7 +1,6 @@
 #!/bin/bash
 # Glink Daemon 自检脚本 — 用于 cron 定时检查
 # 建议 cron: */5 * * * * ~/glink/bin/glink-healthcheck.sh
-# 建议 cron: */5 * * * * ~/glink/glink/bin/glink-healthcheck.sh
 
 BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PIDFILE="$BASE_DIR/.glink-daemon.pid"
