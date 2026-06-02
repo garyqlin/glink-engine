@@ -19,6 +19,7 @@ from .log import get_reporter, log_warn
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "bus"))
 from bus import main_bus
 from bus.agent_client import load_workflow as _shared_load_workflow
+from bus.project_memory import GLK_ROOT, _glk_path, sanitize, project_init, project_list, project_get, project_read_context, project_update_context
 
 _REST_PROJECT: dict[str, str] = {"name": "testglink"}
 
@@ -77,6 +78,7 @@ class DashHandler(BaseHTTPRequestHandler):
         if path != "/health" and not self._require_token():
             return
         qstr = self._qstr()
+
         if path == "/restart":
             is_force = qstr.get("force", "").lower() in ("true", "1")
             proj = get_project()
@@ -87,6 +89,50 @@ class DashHandler(BaseHTTPRequestHandler):
                 }
             )
             Thread(target=lambda: self_restart(proj, force=is_force), daemon=True).start()
+
+        # ── Project Memory POST 端点（共享记忆） ────────────────
+        elif path == "/project/create":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+            project_id = data.get("project_id", qstr.get("project_id", ""))
+            if not project_id:
+                self.send_json({"error": "project_id is required"}, 400)
+                return
+            context = data.get("context", "")
+            result = project_init(project_id, context)
+            self.send_json(result)
+
+        elif path.startswith("/project/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                action = parts[2]
+                project_id = parts[3]
+                if action == "update":
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = self.rfile.read(length) if length else b"{}"
+                    try:
+                        data = json.loads(body)
+                    except json.JSONDecodeError:
+                        self.send_json({"error": "invalid JSON"}, 400)
+                        return
+                    result = project_update_context(
+                        project_id,
+                        context=data.get("context", ""),
+                        event_type=data.get("event_type", ""),
+                        agent=data.get("agent", ""),
+                        detail=data.get("detail", ""),
+                    )
+                    self.send_json(result)
+                else:
+                    self.send_json({"error": f"unknown action {action!r}"}, 404)
+            else:
+                self.send_json({"error": "invalid path"}, 400)
+
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -276,6 +322,37 @@ class DashHandler(BaseHTTPRequestHandler):
             has_rep = hasattr(r, "reporters")
             channels = [type(rep).__name__ for rep in r.reporters] if has_rep else [rtype]
             self.send_json({"type": rtype, "channels": channels})
+
+        # ── Project Memory API（共享记忆） ─────────────────────
+        elif path == "/project/list":
+            try:
+                projects = project_list()
+                self.send_json({"projects": projects})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+
+        elif path.startswith("/project/"):
+            # 路由: /project/<action>/<project_id>
+            parts = path.split("/")
+            if len(parts) >= 4:
+                action = parts[2]
+                project_id = parts[3]
+                if action == "get":
+                    result = project_get(project_id)
+                    if result:
+                        self.send_json(result)
+                    else:
+                        self.send_json({"error": f"project {project_id!r} not found"}, 404)
+                elif action == "context":
+                    context = project_read_context(project_id)
+                    if context is not None:
+                        self.send_json({"project_id": project_id, "context": context})
+                    else:
+                        self.send_json({"error": f"project {project_id!r} has no context"}, 404)
+                else:
+                    self.send_json({"error": f"unknown action {action!r}"}, 404)
+            else:
+                self.send_json({"error": "invalid path"}, 400)
 
         else:
             self.send_json({"error": "not found"}, 404)
