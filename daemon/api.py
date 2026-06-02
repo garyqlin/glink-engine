@@ -17,8 +17,8 @@ from .core import AGENT_PORTS, load_workflow, probe_agent
 from .log import get_reporter, log_warn
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "bus"))
-import main_bus
-from agent_client import load_workflow as _shared_load_workflow
+from bus import main_bus
+from bus.agent_client import load_workflow as _shared_load_workflow
 
 _REST_PROJECT: dict[str, str] = {"name": "testglink"}
 

@@ -8,17 +8,17 @@ Glink Reporter — 渠道无关的 Session 抽象层
   - summary(steps)  → 推 step 进展摘要
 
 内置实现（当前）：
-  - FeishuReporter  → 飞书卡片/webhook
-  - ConsoleReporter → 标准输出（默认 fallback）
-  - SilentReporter  → 静默（只写日志，不推任何消息）
-  - MultiReporter   → 多路聚合
+  - WebhookReporter → JSON to any webhook URL
+  - ConsoleReporter → stdout (default fallback)
+  - SilentReporter  → quiet (log only, no push)
+  - MultiReporter   → multi-channel aggregation
 
 待实现：
-  - ZaguReporter    → 推送到扎古会话（channel-agnostic Session 接口定义后）
+  - ZaguReporter    → push to agent session
 
 配置方式（按优先级）：
   1. glink-config.yaml 的 reporting.channels 列表
-  2. 环境变量 GLINK_REPORTER=feishu|console|silent
+  2. GLINK_REPORTER=webhook|console|silent
   3. 默认：ConsoleReporter
 """
 
@@ -74,7 +74,7 @@ class ReportSession(ABC):
 
 
 # ══════════════════════════════════════════════════════════
-# 飞书实现
+# Webhook implementation
 # ══════════════════════════════════════════════════════════
 
 SEVERITY_COLORS = {
@@ -85,8 +85,8 @@ SEVERITY_COLORS = {
 }
 
 
-class FeishuReporter(ReportSession):
-    """飞书 Webhook 推送"""
+class WebhookReporter(ReportSession):
+    """Generic webhook reporter (Feishu/Slack/Discord compatible)"""
 
     def __init__(self, webhook_url: str, session_label: str = ""):
         self.url = webhook_url
@@ -152,7 +152,7 @@ class FeishuReporter(ReportSession):
                 ok = json.loads(body).get("StatusCode", 1) == 0
                 return ok
         except Exception as e:
-            log.warning(f"飞书发送失败: {e}")
+            log.warning(f"Webhook send failed: {e}")
             return False
 
 
@@ -251,12 +251,12 @@ def create_reporter(config: dict | None = None) -> ReportSession:
         for ch in channels:
             t = ch.get("type", "")
             label = ch.get("session", ch.get("label", "Glink"))
-            if t == "feishu":
+            if t == "webhook":
                 url = ch.get("webhook", "") or DEFAULT_FEISHU_WEBHOOK
                 if url:
-                    reporters.append(FeishuReporter(url, label))
+                    reporters.append(WebhookReporter(url, label))
                 else:
-                    log.warning("feishu 渠道未配置 webhook url")
+                    log.warning("webhook channel: no webhook URL configured")
             elif t == "console":
                 reporters.append(ConsoleReporter(label))
             elif t == "silent":
@@ -267,11 +267,11 @@ def create_reporter(config: dict | None = None) -> ReportSession:
     # 2. 环境变量
     env_reporter = os.environ.get("GLINK_REPORTER", "").lower()
     if not reporters and env_reporter:
-        if env_reporter == "feishu":
+        if env_reporter == "webhook":
             if DEFAULT_FEISHU_WEBHOOK:
-                reporters.append(FeishuReporter(DEFAULT_FEISHU_WEBHOOK))
+                reporters.append(WebhookReporter(DEFAULT_FEISHU_WEBHOOK))
             else:
-                log.warning("GLINK_REPORTER=feishu 但未设置 GLINK_ALERT_WEBHOOK")
+                log.warning("GLINK_REPORTER=webhook but GLINK_ALERT_WEBHOOK not set")
         elif env_reporter == "silent":
             reporters.append(SilentReporter())
         else:
@@ -293,21 +293,21 @@ def create_reporter(config: dict | None = None) -> ReportSession:
 if __name__ == "__main__":
     import sys
 
-    if "--test-feishu" in sys.argv:
-        url = sys.argv[sys.argv.index("--test-feishu") + 1]
-        r = FeishuReporter(url, "Glink 测试")
+    if "--test-webhook" in sys.argv:
+        url = sys.argv[sys.argv.index("--test-webhook") + 1]
+        r = WebhookReporter(url, "Glink Test")
         r.push("这是 Glink Reporter 抽象层的测试消息 ✅\n渠道无关的 Session 设计已就绪。")
         r.alert("API 测试", "这是来自 Glink Reporter 抽象层的告警测试", "red")
-        r.summary("sandbox-builder", 5, 10, "✅ 完成", "绘墨", "1m23s", "UI 工具栏+分数面板完成")
-        print("✅ 飞书测试已发送")
+        r.summary("sandbox-builder", 5, 10, "✅ Done", "ink", "1m23s", "UI + score panel complete")
+        print("✅ Webhook test sent")
 
     elif "--list" in sys.argv:
         r = ConsoleReporter("Glink 测试")
         r.push(
-            "可用的 Reporter 实现:\n- ConsoleReporter (默认)\n- FeishuReporter\n- SilentReporter\n- MultiReporter (多路聚合)"
+            "Available Reporter implementations:\n- ConsoleReporter (default)\n- WebhookReporter\n- SilentReporter\n- MultiReporter"}]}
         )
     else:
         r = ConsoleReporter()
         r.push(
-            "Glink Reporter 抽象层 v1.0\n\n使用方式:\n  python3 reporter.py --test-feishu <webhook_url>\n  python3 reporter.py --list"
+            "Glink Reporter Layer v1.0\n\nUsage:\n  python3 reporter.py --test-webhook <webhook_url>\n  python3 reporter.py --list"
         )

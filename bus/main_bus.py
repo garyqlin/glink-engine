@@ -18,12 +18,85 @@ import fcntl
 import json
 import os
 import sys
+import threading
 from datetime import datetime
 
 from . import sanitize_project_name
 
 # Reporter 延迟导入以避免循环依赖；仅在 write 失败时用于告警
 _send_alert = None
+
+# ---- Bus Read Cache ----
+# 缓存每个 JSONL 文件的 行号→文件偏移 映射，避免 read() 每次 O(n) 全量扫描
+_read_cache: dict[str, tuple[int, list[int]]] = {}
+_cache_lock = threading.Lock()
+
+
+def _rebuild_cache(project_name: str) -> list[int]:
+    """重建文件行偏移索引，返回偏移列表"""
+    path = bus_path(project_name)
+    offsets = [0]
+    try:
+        with open(path, "rb") as f:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                offsets.append(f.tell())
+        _read_cache[project_name] = (len(offsets) - 1, offsets)
+        return offsets
+    except FileNotFoundError:
+        _read_cache[project_name] = (0, [])
+        return []
+
+
+def _invalidate_cache(project_name: str):
+    """写入新行后使缓存失效"""
+    with _cache_lock:
+        _read_cache.pop(project_name, None)
+
+
+def _cached_read(project_name: str, limit: int = 20, since_type: str | None = None):
+    """使用行偏移索引的 O(n) read，首次全量扫描后缓存偏移"""
+    path = bus_path(project_name)
+    if not os.path.exists(path):
+        return []
+
+    with _cache_lock:
+        cache_entry = _read_cache.get(project_name)
+
+    offsets = None
+    if cache_entry is not None:
+        total_lines, offsets = cache_entry
+    else:
+        with _cache_lock:
+            offsets = _rebuild_cache(project_name)
+
+    if not offsets:
+        return []
+
+    # 只读取最后 limit 行附近的偏移
+    start_offset = offsets[max(0, len(offsets) - limit - 5)]
+    entries = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            f.seek(start_offset)
+            if start_offset > 0:
+                f.readline()  # 跳过可能不完整的行
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if since_type is None or entry["type"] == since_type:
+                        entries.append(entry)
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+
+    return entries[-limit:]
 
 
 def _set_alert_handler(handler):
@@ -63,6 +136,8 @@ def write(project_name: str, event_type: str, agent: str, data, stage: str = "")
                 f.flush()
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        # 写入后使缓存失效，下次 read 重建索引
+        _invalidate_cache(project_name)
     except OSError as e:
         # 写入失败不抛出，通过 Reporter 告警（有则发，无则静默）
         msg = f"[main_bus.write] IOError on {path}: {e}"
@@ -73,41 +148,14 @@ def write(project_name: str, event_type: str, agent: str, data, stage: str = "")
     return entry
 
 
-def read(project_name: str, limit: int = 20, since_type: str = None):
-    """读取 Main Bus 最近的事件
-
-        TODO: 当前实现为 O(n) 扫描整个文件。对于长期运行项目，
-
-    事件可达数万行。优化方向：
-        - 维护文件行数偏移量索引（如 .idx 文件缓存行号→offset 映射）
-        - 或使用环形缓冲区缓存最近 N 条事件
-        - 或改用 SQLite / 结构化存储
-    """
-    path = bus_path(project_name)
-    if not os.path.exists(path):
-        return []
-
-    # BUG-02: 负数或零 n 参数校验（2026-05-25 Forge 发现）
+def read(project_name: str, limit: int = 20, since_type: str | None = None):
+    """读取 Main Bus 最近的事件（带行偏移缓存，首次 O(n)，后续 O(limit)）"""
     if limit <= 0:
         limit = 20
-
-    entries = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                if since_type is None or entry["type"] == since_type:
-                    entries.append(entry)
-            except json.JSONDecodeError:
-                continue
-
-    return entries[-limit:]
+    return _cached_read(project_name, limit=limit, since_type=since_type)
 
 
-def latest(project_name: str, event_type: str = None, agent: str = None):
+def latest(project_name: str, event_type: str | None = None, agent: str | None = None):
     """获取最新的一条事件"""
     entries = read(project_name, limit=100)
     for e in reversed(entries):

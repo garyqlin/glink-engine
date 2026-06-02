@@ -32,7 +32,7 @@ from .log import (
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(BASE_DIR, "bus"))
 
-import main_bus
+from bus import main_bus
 
 
 # ── Bus 写入安全包装（P0-A: 检查返回值，写入失败时让 step 失败）──
@@ -45,10 +45,10 @@ def _bus_write(project_name: str, event_type: str, agent: str, data, stage: str 
     return True
 
 
-from agent_client import AGENT_PORTS
-from agent_client import call_agent as _call_agent
-from agent_client import load_workflow as _load_workflow
 from bus import sanitize_project_name as _sanitize
+from bus.agent_client import AGENT_PORTS
+from bus.agent_client import call_agent as _call_agent
+from bus.agent_client import load_workflow as _load_workflow
 
 from .config import get_max_concurrent_steps, get_max_retries, get_poll_interval, get_poll_max_wait
 
@@ -284,17 +284,19 @@ def execute_step(
     return dispatch[step_type](project_name, step, step_index, total_steps, retries)
 
 
-def _execute_regular(
+def _execute_with_template(
     project_name,
     step,
     step_index,
     total_steps,
+    build_enriched_task,
+    step_label="",
     retries=MAX_RETRIES,
 ):
-    planned_agent = step.get("executor", "标准版")
+    """Shared execution template for agent steps (regular/review/compact)."""
+    planned_agent = step.get("executor", "standard")
     fallback_agents = step.get("fallback_agents", [])
     title = step.get("title", f"Step {step_index + 1}")
-    task = step.get("description") or step.get("task", "")
     stage = step.get("stage", f"step-{step_index + 1}")
     depends_on = step.get("depends_on", [])
     optional = step.get("optional", False)
@@ -305,18 +307,15 @@ def _execute_regular(
         msg = str(exc)
         log_err(msg)
         _bus_write(
-            project_name,
-            "task.failed",
-            planned_agent,
-            {"title": title, "error": msg, "stage": stage},
-            stage=stage,
+            project_name, "task.failed", planned_agent, {"title": title, "error": msg, "stage": stage}, stage=stage
         )
         return False
-    log_step(
-        f"╔══ [{step_index + 1}/{total_steps}] {title} → {actual_agent}"
-        + (f" (fallback from {fallback_from})" if fallback_from else "")
-    )
 
+    label_suffix = f" [{step_label}]" if step_label else ""
+    log_step(
+        f"[{step_index + 1}/{total_steps}] {title} -> {actual_agent}{label_suffix}"
+        + (f" (fallback: {fallback_from})" if fallback_from else "")
+    )
     save_checkpoint(project_name, step_index, title, "running")
     if not _bus_write(
         project_name,
@@ -334,481 +333,209 @@ def _execute_regular(
         return False
 
     if depends_on:
-        log(f"  ⏳ 等待依赖: {depends_on}")
+        log(f"  waiting on deps: {depends_on}")
         if not wait_for_deps(project_name, depends_on):
             _bus_write(
                 project_name,
                 "task.failed",
                 "glink",
-                {"title": title, "error": f"依赖超时: {depends_on}", "stage": stage},
+                {"title": title, "error": f"deps timeout: {depends_on}", "stage": stage},
                 stage=stage,
             )
             return False
 
-    enriched_task = task
+    ctx_events = main_bus.read(project_name, limit=30)
+    prev_completed = [ev for ev in ctx_events if ev["type"] == "task.completed" and ev.get("stage", "") != stage]
+    enriched_task = build_enriched_task(step, project_name, prev_completed)
+
+    last_error = None
+    for attempt in range(retries + 1):
+        if attempt > 0:
+            log_retry(f"retry {attempt}/{retries} -> {title}")
+            time.sleep(3)
+        log(f"  calling {actual_agent}(:{port}) [try-{attempt + 1}]{label_suffix}")
+        log(f"  task: {len(enriched_task)} chars")
+        result = call_agent(actual_agent, enriched_task)
+
+        if result["status"] == "ok":
+            if not _bus_write(
+                project_name,
+                "task.completed",
+                actual_agent,
+                {
+                    "title": title,
+                    "output_preview": result["output"][:200],
+                    "stage": stage,
+                    "step_index": step_index,
+                    "planned_agent": planned_agent,
+                    "fallback_from": fallback_from,
+                },
+                stage=stage,
+            ):
+                return False
+            prev = result["output"][:200]
+            log_ok(f"done | {prev}...")
+            dur = result.get("duration", 0)
+            ds = f"{int(dur // 60)}m{int(dur % 60)}s" if isinstance(dur, (int, float)) else str(dur)
+            get_reporter().summary(
+                project=project_name,
+                step_index=step_index + 1,
+                total=total_steps,
+                status=actual_agent,
+                agent=actual_agent,
+                duration=ds,
+                detail=prev[:100],
+            )
+            return True
+        else:
+            last_error = result.get("error", "unknown")
+            log_warn(f"  try-{attempt + 1} failed: {last_error}")
+
+    if optional:
+        _bus_write(
+            project_name,
+            "task.completed",
+            actual_agent,
+            {"title": title, "status": "skipped_optional", "error": last_error, "stage": stage},
+            stage=stage,
+        )
+        log_warn(f"optional {title} skipped: {last_error[:80]}")
+        get_reporter().alert(f"skipped: {title}", last_error[:80], severity="yellow")
+        return True
+
+    _bus_write(
+        project_name,
+        "task.failed",
+        actual_agent,
+        {
+            "title": title,
+            "error": last_error,
+            "stage": stage,
+            "step_index": step_index,
+            "planned_agent": planned_agent,
+            "fallback_from": fallback_from,
+        },
+        stage=stage,
+    )
+    log_err(f"step {title} failed: {last_error[:120]}")
+    get_reporter().alert(f"failed: {title}", last_error[:120], severity="red")
+    return False
+
+
+def _execute_regular(project_name, step, step_index, total_steps, retries=MAX_RETRIES):
+    base_task = step.get("description") or step.get("task", "")
     input_file_path = step.get("input_file", "")
     output_file_path = step.get("output_file", "")
-    if input_file_path:
-        try:
-            resolved_input = _safe_project_path(input_file_path)
-        except ValueError as exc:
-            log_err(f"  input_file path traversal detected: {exc}")
-            return False
-        if os.path.isfile(resolved_input):
+
+    def build_task(_step, _proj, prev_completed):  # noqa: ARG001
+        task_out = base_task
+        if input_file_path:
             try:
-                with open(resolved_input) as f:
-                    prev_content = f.read()
-                input_summary = (
-                    f"【输入文件】{resolved_input}\n"
-                    f"文件大小: {len(prev_content)} 字符\n"
-                    f"文件内容:\n```html\n{prev_content}\n```\n"
-                )
-                resolved_output = _safe_project_path(output_file_path) if output_file_path else ""
-                output_hint = (
-                    (
-                        "\n🔴🔴🔴 强制指令（不可违反）🔴🔴🔴\n"
-                        "1. task 描述只是『本次增量修改』的需求\n"
-                        "2. **必须**完整读取下方的 input_file 内容\n"
-                        "3. **在 input_file 基础上**添加或修改对应代码区块\n"
-                        "4. **输出完整的 HTML 文件**（不要只输出新增代码段）\n"
-                        "5. 用 write_file 工具将完整 HTML 写入以下路径：\n"
-                        f"   {resolved_output}\n"
-                        "6. **不要创建独立 demo/测试文件**，所有代码合并到同一个 HTML\n"
+                resolved_input = _safe_project_path(input_file_path)
+            except ValueError as exc:
+                log_err(f"input_file path traversal: {exc}")
+                raise
+            if os.path.isfile(resolved_input):
+                try:
+                    with open(resolved_input) as f:
+                        prev_content = f.read()
+                    resolved_output = _safe_project_path(output_file_path) if output_file_path else ""
+                    hint = (
+                        f"\n### Incremental task\n{base_task}\n"
+                        f"\n### Input file: {resolved_input} ({len(prev_content)} chars)\n"
+                        f"Read fully, then modify. Output complete HTML to: {resolved_output}\n"
+                        if output_file_path
+                        else ""
                     )
-                    if output_file_path
-                    else ""
-                )
-                enriched_task = (
-                    f"## {title}\n\n### 本次增量需求\n{task}\n\n{output_hint}"
-                    "### 输入文件（必须完整读取后增量修改）\n"
-                    "以下为当前项目完整代码。请在此基础之上，自行添加本次需求对应的代码区块。\n"
-                    "保留原有所有功能不变。输出包含所有代码的完整 HTML 文件。\n\n"
-                    f"{input_summary}"
-                )
-                log(f"  已读取 input_file: {resolved_input} ({len(prev_content)} 字符)")
-            except Exception as exc:
-                log_warn(f"  无法读取 input_file {resolved_input}: {exc}")
-        else:
-            log_warn(f"  input_file 不存在: {resolved_input}")
+                    task_out = hint + "\n" + f"```\n{prev_content}\n```\n"
+                    log(f"  read {resolved_input} ({len(prev_content)} chars)")
+                except Exception as exc:
+                    log_warn(f"  cannot read input: {exc}")
+            else:
+                log_warn(f"  input not found: {resolved_input}")
 
-    ctx_events = main_bus.read(project_name, limit=30)
-    prev_completed = [ev for ev in ctx_events if ev["type"] == "task.completed" and ev.get("stage", "") != stage]
-    if prev_completed:
-        ctx_lines = ["\n### 已完成的前序步骤"]
-        for ev in prev_completed[-5:]:
-            s = ev.get("stage", "?")
-            t = ev.get("data", {}).get("title", "?")
-            o = ev.get("data", {}).get("output_preview", "")[:150]
-            ctx_lines.append(f"- **{t}** ({s}): {o}")
-        enriched_task += "\n" + "\n".join(ctx_lines)
-
-    last_error = None
-    for attempt in range(retries + 1):
-        if attempt > 0:
-            log_retry(f"重试 {attempt}/{retries} → {title}")
-            time.sleep(3)
-        log(f"  📤 调用 {actual_agent}(:{port}) [attempt-{attempt + 1}]")
-        log(f"  任务长度: {len(enriched_task)} 字符")
-        result = call_agent(actual_agent, enriched_task)
-
-        if result["status"] == "ok":
-            if not _bus_write(
-                project_name,
-                "task.completed",
-                actual_agent,
-                {
-                    "title": title,
-                    "output_preview": result["output"][:200],
-                    "stage": stage,
-                    "step_index": step_index,
-                    "planned_agent": planned_agent,
-                    "fallback_from": fallback_from,
-                },
-                stage=stage,
-            ):
-                return False
-            output_preview = result["output"][:200]
-            log_ok(f"完成 | {output_preview}…")
-            dur_sec = result.get("duration", 0)
-            dur_str = (
-                f"{int(dur_sec // 60)}m{int(dur_sec % 60)}s" if isinstance(dur_sec, (int, float)) else str(dur_sec)
-            )
-            get_reporter().summary(
-                project=project_name,
-                step_index=step_index + 1,
-                total=total_steps,
-                status=actual_agent,
-                agent=actual_agent,
-                duration=dur_str,
-                detail=output_preview[:100],
-            )
-            return True
-        else:
-            last_error = result.get("error", "unknown")
-            log_warn(f"  attempt-{attempt + 1} 失败: {last_error}")
-
-    if optional:
-        if not _bus_write(
-            project_name,
-            "task.completed",
-            actual_agent,
-            {
-                "title": title,
-                "status": "skipped_optional",
-                "error": last_error,
-                "stage": stage,
-            },
-            stage=stage,
-        ):
-            return False
-        msg = f"可选步骤 {title} 失败（跳过）: {last_error[:80]}"
-        log_warn(msg)
-        get_reporter().alert(f"⏭ 可选步骤跳过: {title}", msg, severity="yellow")
-        return True
-
-    _bus_write(
-        project_name,
-        "task.failed",
-        actual_agent,
-        {
-            "title": title,
-            "error": last_error,
-            "stage": stage,
-            "step_index": step_index,
-            "planned_agent": planned_agent,
-            "fallback_from": fallback_from,
-        },
-        stage=stage,
-    )
-    msg = f"必选步骤 {title} 失败，流程中断: {last_error[:120]}"
-    log_err(msg)
-    get_reporter().alert(f"❌ 步骤失败: {title}", msg, severity="red")
-    return False
-
-
-def _execute_review(
-    project_name,
-    step,
-    step_index,
-    total_steps,
-    retries=MAX_RETRIES,
-):
-    planned_agent = step.get("executor", "标准版")
-    fallback_agents = step.get("fallback_agents", [])
-    title = step.get("title", f"Step {step_index + 1}")
-    task = step.get("description") or step.get("task", "")
-    stage = step.get("stage", f"step-{step_index + 1}")
-    depends_on = step.get("depends_on", [])
-    optional = step.get("optional", False)
+        if prev_completed:
+            ctx = ["\n### Prior steps"]
+            for ev in prev_completed[-5:]:
+                s = ev.get("stage", "?")
+                t = ev.get("data", {}).get("title", "?")
+                o = ev.get("data", {}).get("output_preview", "")[:150]
+                ctx.append(f"- {t} ({s}): {o}")
+            task_out += "\n" + "\n".join(ctx)
+        return task_out
 
     try:
-        actual_agent, port, fallback_from = resolve_agent(planned_agent, fallback_agents)
-    except RuntimeError as exc:
-        msg = str(exc)
-        log_err(msg)
-        _bus_write(
-            project_name,
-            "task.failed",
-            planned_agent,
-            {"title": title, "error": msg, "stage": stage},
-            stage=stage,
-        )
-        return False
-    log_step(
-        f"╔══ [{step_index + 1}/{total_steps}] {title} → {actual_agent} [review]"
-        + (f" (fallback from {fallback_from})" if fallback_from else "")
-    )
-
-    save_checkpoint(project_name, step_index, title, "running")
-    if not _bus_write(
-        project_name,
-        "task.started",
-        actual_agent,
-        {
-            "title": title,
-            "stage": stage,
-            "step_index": step_index,
-            "planned_agent": planned_agent,
-            "fallback_from": fallback_from,
-        },
-        stage=stage,
-    ):
+        return _execute_with_template(project_name, step, step_index, total_steps, build_task, retries=retries)
+    except ValueError:
         return False
 
-    if depends_on:
-        log(f"  ⏳ 等待依赖: {depends_on}")
-        if not wait_for_deps(project_name, depends_on):
-            _bus_write(
-                project_name,
-                "task.failed",
-                "glink",
-                {"title": title, "error": f"依赖超时: {depends_on}", "stage": stage},
-                stage=stage,
-            )
-            return False
 
-    # Review mode: read input_file but add review prefix
-    enriched_task = "[CODE REVIEW] 请对以下代码做全面审查：\n1. 功能完整性\n2. 性能问题\n3. 安全隐患\n4. 代码可读性\n5. 测试覆盖\n\n"
-    enriched_task += task
-
+def _execute_review(project_name, step, step_index, total_steps, retries=MAX_RETRIES):
+    base_task = step.get("description") or step.get("task", "")
     input_file_path = step.get("input_file", "")
     output_file_path = step.get("output_file", "")
-    if input_file_path:
-        try:
-            resolved_input = _safe_project_path(input_file_path)
-        except ValueError as exc:
-            log_err(f"  input_file path traversal detected: {exc}")
-            return False
-        if os.path.isfile(resolved_input):
+
+    def build_task(_step, _proj, prev_completed):  # noqa: ARG001
+        task_out = "[CODE REVIEW]\n" + base_task
+        if input_file_path:
             try:
-                with open(resolved_input) as f:
-                    prev_content = f.read()
-                resolved_output = _safe_project_path(output_file_path) if output_file_path else ""
-                output_hint = (
-                    (f"\n🔴 输出路径（将审查报告写入此文件）\n   {resolved_output}\n") if output_file_path else ""
-                )
-                enriched_task += f"\n\n{output_hint}\n### 待审查代码\n```\n{prev_content}\n```\n"
-                log(f"  已读取审查输入: {resolved_input} ({len(prev_content)} 字符)")
-            except Exception as exc:
-                log_warn(f"  无法读取审查输入 {resolved_input}: {exc}")
-        else:
-            log_warn(f"  审查输入不存在: {resolved_input}")
+                resolved_input = _safe_project_path(input_file_path)
+            except ValueError as exc:
+                log_err(f"review input_file: {exc}")
+                raise
+            if os.path.isfile(resolved_input):
+                try:
+                    with open(resolved_input) as f:
+                        content = f.read()
+                    resolved_output = _safe_project_path(output_file_path) if output_file_path else ""
+                    out_hint = f"\n### Save report to\n  {resolved_output}\n" if output_file_path else ""
+                    task_out += f"\n\n{out_hint}\n### Code\n```\n{content}\n```\n"
+                    log(f"  review input: {resolved_input} ({len(content)} chars)")
+                except Exception as exc:
+                    log_warn(f"  review read error: {exc}")
+            else:
+                log_warn(f"  review input not found: {resolved_input}")
 
-    ctx_events = main_bus.read(project_name, limit=30)
-    prev_completed = [ev for ev in ctx_events if ev["type"] == "task.completed" and ev.get("stage", "") != stage]
-    if prev_completed:
-        ctx_lines = ["\n### 已完成的前序步骤"]
-        for ev in prev_completed[-5:]:
-            s = ev.get("stage", "?")
-            t = ev.get("data", {}).get("title", "?")
-            o = ev.get("data", {}).get("output_preview", "")[:150]
-            ctx_lines.append(f"- **{t}** ({s}): {o}")
-        enriched_task += "\n" + "\n".join(ctx_lines)
-
-    last_error = None
-    for attempt in range(retries + 1):
-        if attempt > 0:
-            log_retry(f"重试 {attempt}/{retries} → {title}")
-            time.sleep(3)
-        log(f"  📤 调用 {actual_agent}(:{port}) [attempt-{attempt + 1}] [review]")
-        log(f"  任务长度: {len(enriched_task)} 字符")
-        result = call_agent(actual_agent, enriched_task)
-
-        if result["status"] == "ok":
-            if not _bus_write(
-                project_name,
-                "task.completed",
-                actual_agent,
-                {
-                    "title": title,
-                    "output_preview": result["output"][:200],
-                    "stage": stage,
-                    "step_index": step_index,
-                    "planned_agent": planned_agent,
-                    "fallback_from": fallback_from,
-                },
-                stage=stage,
-            ):
-                return False
-            output_preview = result["output"][:200]
-            log_ok(f"审查完成 | {output_preview}…")
-            dur_sec = result.get("duration", 0)
-            dur_str = (
-                f"{int(dur_sec // 60)}m{int(dur_sec % 60)}s" if isinstance(dur_sec, (int, float)) else str(dur_sec)
-            )
-            get_reporter().summary(
-                project=project_name,
-                step_index=step_index + 1,
-                total=total_steps,
-                status=actual_agent,
-                agent=actual_agent,
-                duration=dur_str,
-                detail=output_preview[:100],
-            )
-            return True
-        else:
-            last_error = result.get("error", "unknown")
-            log_warn(f"  attempt-{attempt + 1} 失败: {last_error}")
-
-    if optional:
-        if not _bus_write(
-            project_name,
-            "task.completed",
-            actual_agent,
-            {"title": title, "status": "skipped_optional", "error": last_error, "stage": stage},
-            stage=stage,
-        ):
-            return False
-        msg = f"可选审查步骤 {title} 失败（跳过）: {last_error[:80]}"
-        log_warn(msg)
-        get_reporter().alert(f"⏭ 可选跳过: {title}", msg, severity="yellow")
-        return True
-
-    _bus_write(
-        project_name,
-        "task.failed",
-        actual_agent,
-        {
-            "title": title,
-            "error": last_error,
-            "stage": stage,
-            "step_index": step_index,
-            "planned_agent": planned_agent,
-            "fallback_from": fallback_from,
-        },
-        stage=stage,
-    )
-    msg = f"审查步骤 {title} 失败: {last_error[:120]}"
-    log_err(msg)
-    get_reporter().alert(f"❌ 审查失败: {title}", msg, severity="red")
-    return False
-
-
-def _execute_compact(
-    project_name,
-    step,
-    step_index,
-    total_steps,
-    retries=MAX_RETRIES,
-):
-    planned_agent = step.get("executor", "标准版")
-    fallback_agents = step.get("fallback_agents", [])
-    title = step.get("title", f"Step {step_index + 1}")
-    stage = step.get("stage", f"step-{step_index + 1}")
-    depends_on = step.get("depends_on", [])
-    optional = step.get("optional", False)
+        if prev_completed:
+            ctx = ["\n### Prior steps"]
+            for ev in prev_completed[-5:]:
+                s = ev.get("stage", "?")
+                t = ev.get("data", {}).get("title", "?")
+                o = ev.get("data", {}).get("output_preview", "")[:150]
+                ctx.append(f"- {t} ({s}): {o}")
+            task_out += "\n" + "\n".join(ctx)
+        return task_out
 
     try:
-        actual_agent, port, fallback_from = resolve_agent(planned_agent, fallback_agents)
-    except RuntimeError as exc:
-        msg = str(exc)
-        log_err(msg)
-        _bus_write(
-            project_name,
-            "task.failed",
-            planned_agent,
-            {"title": title, "error": msg, "stage": stage},
-            stage=stage,
+        return _execute_with_template(
+            project_name, step, step_index, total_steps, build_task, step_label="review", retries=retries
         )
-        return False
-    log_step(
-        f"╔══ [{step_index + 1}/{total_steps}] {title} → {actual_agent} [compact]"
-        + (f" (fallback from {fallback_from})" if fallback_from else "")
-    )
-
-    save_checkpoint(project_name, step_index, title, "running")
-    if not _bus_write(
-        project_name,
-        "task.started",
-        actual_agent,
-        {"title": title, "stage": stage, "step_index": step_index},
-        stage=stage,
-    ):
+    except ValueError:
         return False
 
-    if depends_on:
-        log(f"  ⏳ 等待依赖: {depends_on}")
-        if not wait_for_deps(project_name, depends_on):
-            _bus_write(
-                project_name,
-                "task.failed",
-                "glink",
-                {"title": title, "error": f"依赖超时: {depends_on}", "stage": stage},
-                stage=stage,
-            )
-            return False
 
-    # Compact mode: fixed compression task, no input_file
-    enriched_task = (
-        "[CONTEXT COMPRESSION] 请对以下对话历史做摘要压缩，保留：\n"
-        "1. 关键决策\n"
-        "2. 核心代码变更\n"
-        "3. 未解决的问题\n"
-        f"\n当前项目：{project_name}\n"
-        f"步骤：{step_index + 1}/{total_steps}\n"
-        f"标题：{title}\n"
+def _execute_compact(project_name, step, step_index, total_steps, retries=MAX_RETRIES):
+    title = step.get("title", f"Step {step_index + 1}")
+
+    def build_task(step, proj, prev_completed):  # noqa: ARG001
+        task_out = (
+            "[CONTEXT COMPRESSION] Summarize:\n"
+            "1. Key decisions\n2. Code changes\n3. Open issues\n"
+            f"\nProject: {proj}\nStep: {step_index + 1}/{total_steps}\nTitle: {title}\n"
+        )
+        if prev_completed:
+            ctx = ["\n### Context"]
+            for ev in prev_completed[-10:]:
+                s = ev.get("stage", "?")
+                t = ev.get("data", {}).get("title", "?")
+                o = ev.get("data", {}).get("output_preview", "")[:300]
+                ctx.append(f"- {t} ({s}): {o}")
+            task_out += "\n" + "\n".join(ctx)
+        return task_out
+
+    return _execute_with_template(
+        project_name, step, step_index, total_steps, build_task, step_label="compact", retries=retries
     )
-
-    # Include previous context from bus
-    ctx_events = main_bus.read(project_name, limit=50)
-    completed_events = [ev for ev in ctx_events if ev["type"] == "task.completed"]
-    if completed_events:
-        ctx_lines = ["\n### 需要压缩的上下文（已完成步骤）"]
-        for ev in completed_events[-10:]:
-            s = ev.get("stage", "?")
-            t = ev.get("data", {}).get("title", "?")
-            o = ev.get("data", {}).get("output_preview", "")[:300]
-            ctx_lines.append(f"- **{t}** (stage: {s}): {o}")
-        enriched_task += "\n" + "\n".join(ctx_lines)
-
-    last_error = None
-    for attempt in range(retries + 1):
-        if attempt > 0:
-            log_retry(f"重试 {attempt}/{retries} → {title}")
-            time.sleep(3)
-        log(f"  📤 调用 {actual_agent}(:{port}) [attempt-{attempt + 1}] [compact]")
-        log(f"  任务长度: {len(enriched_task)} 字符")
-        result = call_agent(actual_agent, enriched_task)
-
-        if result["status"] == "ok":
-            if not _bus_write(
-                project_name,
-                "task.completed",
-                actual_agent,
-                {
-                    "title": title,
-                    "output_preview": result["output"][:200],
-                    "stage": stage,
-                    "step_index": step_index,
-                },
-                stage=stage,
-            ):
-                return False
-            output_preview = result["output"][:200]
-            log_ok(f"压缩完成 | {output_preview}…")
-            dur_sec = result.get("duration", 0)
-            dur_str = (
-                f"{int(dur_sec // 60)}m{int(dur_sec % 60)}s" if isinstance(dur_sec, (int, float)) else str(dur_sec)
-            )
-            get_reporter().summary(
-                project=project_name,
-                step_index=step_index + 1,
-                total=total_steps,
-                status=actual_agent,
-                agent=actual_agent,
-                duration=dur_str,
-                detail=output_preview[:100],
-            )
-            return True
-        else:
-            last_error = result.get("error", "unknown")
-            log_warn(f"  attempt-{attempt + 1} 失败: {last_error}")
-
-    if optional:
-        if not _bus_write(
-            project_name,
-            "task.completed",
-            actual_agent,
-            {"title": title, "status": "skipped_optional", "error": last_error, "stage": stage},
-            stage=stage,
-        ):
-            return False
-        msg = f"可选压缩步骤 {title} 失败（跳过）: {last_error[:80]}"
-        log_warn(msg)
-        get_reporter().alert(f"⏭ 可选跳过: {title}", msg, severity="yellow")
-        return True
-
-    _bus_write(
-        project_name,
-        "task.failed",
-        actual_agent,
-        {"title": title, "error": last_error, "stage": stage, "step_index": step_index},
-        stage=stage,
-    )
-    msg = f"压缩步骤 {title} 失败: {last_error[:120]}"
-    log_err(msg)
-    get_reporter().alert(f"❌ 压缩失败: {title}", msg, severity="red")
-    return False
 
 
 # ── Sandbox Security ──────────────────────────────────────

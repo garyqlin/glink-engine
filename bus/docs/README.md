@@ -1,67 +1,61 @@
-# Main Bus — Shared Project Timeline
+# Main Bus — 共享项目时间线
 
-> All agents read/write project-level shared memory through this module.
+> 所有 Agent 通过此文件读写项目级共享记忆
 
-## Overview
+## 概述
 
-Main Bus is the core communication layer for **Glink** multi-agent orchestration.
-It's a **JSONL file system** — one `.jsonl` file per project, recording all events.
-Append-only, never overwritten.
+Main Bus 是 Glink 多 Agent 协作的核心通信层。它是一个 **JSONL 文件系统**，每个项目一条 `.jsonl` 文件，记录所有 Agent 的任务事件。
 
-## Event Types
+## 事件类型
 
-| Type | Meaning | Triggered By |
-|------|---------|-------------|
-| `task.created` | Task created | Glink orchestrator |
-| `task.assigned` | Task assigned | Glink orchestrator |
-| `task.started` | Task execution started | Execution agent |
-| `task.completed` | Task completed successfully | Execution agent |
-| `task.failed` | Task failed | Execution agent |
-| `task.log` | Execution log entry | Execution agent |
-| `project.update` | Project status changed | Glink orchestrator |
+| 类型 | 含义 | 触发方 |
+|:---|:---|:---|
+| `task.created` | 任务创建 | Glink 编排器 |
+| `task.assigned` | 任务分派 | Glink 编排器 |
+| `task.started` | 任务开始执行 | 执行 Agent |
+| `task.completed` | 任务完成 | 执行 Agent |
+| `task.failed` | 任务失败 | 执行 Agent |
+| `task.log` | 执行过程中的日志 | 执行 Agent |
+| `project.update` | 项目状态更新 | Glink 编排器 |
 
-## API Reference
+## API 参考
 
 ### Python API
 
 ```python
-import main_bus
+from main_bus import write, read, latest, status
 
-# Write an event
-main_bus.write("myproject", "task.started", "agent-5", {"title": "Testing"})
+# 写入事件
+write("testglink", "task.started", "Laser", {"title": "测试"})
 
-# Read recent 20 events
-events = main_bus.read("myproject", limit=20)
+# 读取最近 20 条事件
+entries = read("testglink", limit=20)
 
-# Get latest event
-ev = main_bus.latest("myproject", "task.completed")
+# 获取最新事件
+entry = latest("testglink", event_type="task.completed")
 
-# Get project status
-s = main_bus.status("myproject")
-print(s["tasks_completed"], "/", s["total_events"])
+# 获取项目状态
+s = status("testglink")
 ```
 
 ### CLI
 
 ```bash
-# Write
-GLINK_PROJECT=hello-world python3 main_bus.py write task.started agent-5 '{"title":"Testing"}'
+# 写入
+GLINK_PROJECT=testglink python3 main_bus.py write task.started Laser '{"title":"测试"}'
 
-# Read (last 20)
-GLINK_PROJECT=hello-world python3 main_bus.py read 20
+# 读取
+GLINK_PROJECT=testglink python3 main_bus.py read 20
 
-# Status
-GLINK_PROJECT=hello-world python3 main_bus.py status
+# 状态
+GLINK_PROJECT=testglink python3 main_bus.py status
+
+# 最新
+GLINK_PROJECT=testglink python3 main_bus.py latest task.completed
 ```
 
-## Data Storage
+## 数据存储
 
-- Project files: `projects/{project_name}.jsonl`
-- Format: One JSON object per line
-- Event structure: `{ts, type, agent, data, stage}`
-
-## Concurrency Safety
-
-- File-locked writes via `fcntl.flock` (exclusive lock)
-- `n` parameter validated (positive integer, max 1000)
-- Empty project event lists return `[]` gracefully
+- 项目文件：`projects/{project_name}.jsonl`
+- 格式：每行一个 JSON 对象
+- 事件结构：`{ts, type, agent, data, stage}`
