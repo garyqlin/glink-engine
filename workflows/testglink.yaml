@@ -18,7 +18,7 @@ steps:
       阅读 `/Users/gary/Projects/nuoboke-project/客户确认-工作清单.md` 和
       `/Users/gary/.qclaw/workspace/projects/nuobaoke-crm/需求文档原文.md`，
       理解项目全貌、补全范围、优先级排序。
-      将分析结论写入 `/Users/gary/opprime/glink/bus/projects/testglink-analysis.md`。
+      将分析结论写入 `~/glink/bus/projects/testglink-analysis.md`。
     optional: false
 
   # ──── 阶段2: 数据库模型升级 ────
@@ -127,5 +127,5 @@ steps:
       - 🅱 权限分离 4 项
       - 🅲 小程序补全 5 项
       产出完成率报告，不满足 100% 的不提交
-      报告写入 `/Users/gary/opprime/glink/bus/projects/testglink-verify.md`
+      报告写入 `~/glink/bus/projects/testglink-verify.md`
     optional: false

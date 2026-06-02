@@ -10,3 +10,32 @@ __pycache__/
 forge-audit-*.md
 forge-arbitration.md
 checkpoints/
+
+
+# Internal project artifacts (contain personal paths)
+bus/projects/
+glink/forge-audit-*.md
+glink/forge-arbitration.md
+glink/FORGE_REVIEW_*.md
+glink/GLINK_WHITEPAPER.md
+glink/glink-daemon-v*.log
+glink/*.bak*
+glink/*.bak2
+
+
+# Internal artifacts (not for public repo)
+bus/projects/
+glink/bus/projects/
+glink/projects/
+projects/
+dist/
+*.bak*
+*.bak2
+*.log
+docs/GLINK_WHITEPAPER.md
+FORGE_REVIEW_*.md
+GLINK_WHITEPAPER.md
+TEST_REPORT*.md
+
+# Duplicate glink subdirectory (artifact of old project structure)
+glink/
