@@ -125,3 +125,26 @@ def project_get(project_id: str) -> dict | None:
     summary = context[:200] + "..." if context and len(context) > 200 else context
 
     return {"project_id": project_id, "progress": prog, "last_event": last_event, "context_summary": summary}
+
+
+def set_result(project_id: str, agent: str, result_summary: str, success: bool = True):
+    """更新项目 progress.json 的 latest_output 字段"""
+    pdir = _glk_path(project_id)
+    os.makedirs(pdir, exist_ok=True)
+    prog_path = os.path.join(pdir, "progress.json")
+    prog = {}
+    if os.path.exists(prog_path):
+        with open(prog_path) as f:
+            try:
+                prog = json.load(f)
+            except json.JSONDecodeError:
+                pass
+    prog["latest_output"] = {
+        "agent": agent,
+        "result": result_summary[:500],
+        "success": success,
+        "ts": time.time(),
+    }
+    with open(prog_path, "w") as f:
+        json.dump(prog, f, ensure_ascii=False)
+    return {"status": "ok", "project_id": project_id}

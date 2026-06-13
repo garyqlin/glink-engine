@@ -3,23 +3,32 @@
 
 import json
 import os
+import socket
 import socketserver
 import sys
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
+from threading import Thread, Semaphore
 
 from .checks import self_restart
 from .config import get_config as config_get
 from .config import get_server_port
-from .core import AGENT_PORTS, load_workflow, probe_agent
+from .core import AGENT_PORTS, load_workflow, probe_agent, call_agent
 from .log import get_reporter, log_warn
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "bus"))
 from bus import main_bus
 from bus.agent_client import load_workflow as _shared_load_workflow
-from bus.project_memory import GLK_ROOT, _glk_path, sanitize, project_init, project_list, project_get, project_read_context, project_update_context
+from bus.project_memory import GLK_ROOT, _glk_path, sanitize, project_init, project_list, project_get, project_read_context, project_update_context, set_result
+
+# ── 并发令牌桶：限制对同一 agent 的并发线程数 ──────
+_AGENT_CONCURRENT_MAX = 3  # 同 agent 最多同时 3 个任务
+_agent_semaphores: dict[str, Semaphore] = {}
+def _get_agent_sem(agent: str) -> Semaphore:
+    if agent not in _agent_semaphores:
+        _agent_semaphores[agent] = Semaphore(_AGENT_CONCURRENT_MAX)
+    return _agent_semaphores[agent]
 
 _REST_PROJECT: dict[str, str] = {"name": "testglink"}
 
@@ -89,6 +98,59 @@ class DashHandler(BaseHTTPRequestHandler):
                 }
             )
             Thread(target=lambda: self_restart(proj, force=is_force), daemon=True).start()
+
+        # ── /task/assign — 轻量任务走廊 ─────────────────────────
+        elif path == "/task/assign":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+            agent = data.get("agent", "")
+            task = data.get("task", "")
+            if not agent or not task:
+                self.send_json({"error": "'agent' and 'task' are required"}, 400)
+                return
+            project_name = data.get("project", f"task-{agent}-{int(time.time())}")
+            task_id = f"t_{int(time.time() * 1000000)}"
+            timeout = data.get("timeout")  # 不设默认超时
+            project_init(project_name, context=f"Task: {task}\nAgent: {agent}\nAssigned: {datetime.now().isoformat()}")
+            main_bus.write(project_name, "task.assigned", agent, {"task_id": task_id, "task": task})
+            main_bus.write(project_name, "task.started", agent, {"task_id": task_id, "task": task, "title": task[:60]})
+            # 后台线程执行（不阻塞 8426 端口）
+            from threading import Thread as _Thr
+            _sem = _get_agent_sem(agent)
+            def _execute():
+                # 令牌桶：排队等待，限制同 agent 并发数
+                acquired = _sem.acquire(blocking=True, timeout=60)
+                if not acquired:
+                    err = f"agent [{agent}] 任务队列已满，排队超时"
+                    main_bus.write(project_name, "task.failed", agent, {"task_id": task_id, "error": err})
+                    set_result(project_name, agent, err[:500], success=False)
+                    return
+                try:
+                    result = call_agent(agent, task, timeout=timeout)
+                    if result.get("status") == "ok":
+                        output = result.get("output", "")
+                        main_bus.write(project_name, "task.completed", agent, {"task_id": task_id, "output_preview": str(output)[:300]})
+                        set_result(project_name, agent, str(output)[:500], success=True)
+                    else:
+                        err = result.get("error", "unknown error")
+                        main_bus.write(project_name, "task.failed", agent, {"task_id": task_id, "error": err})
+                        set_result(project_name, agent, err[:500], success=False)
+                    project_update_context(project_name, event_type="task.completed", agent=agent, detail=result.get("output", "")[:200])
+                finally:
+                    _sem.release()
+            _Thr(target=_execute, daemon=True).start()
+            self.send_json({
+                "status": "processing",
+                "task_id": task_id,
+                "project": project_name,
+                "agent": agent,
+                "result_url": f"/bus/latest?project={project_name}",
+            })
 
         # ── Project Memory POST 端点（共享记忆） ────────────────
         elif path == "/project/create":

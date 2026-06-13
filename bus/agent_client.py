@@ -12,9 +12,12 @@ agent_client — Glink 共享的 Agent 通讯与工作流加载模块
 
 from __future__ import annotations
 
+import http.client
+import socket
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -33,6 +36,10 @@ AGENT_PORTS: dict[str, int] = {
     "代码臂": 8436,
     "Forge": 8436,
     "forge": 8436,
+    # 徒弟 agent
+    "波塞冬": 8428,
+    "高达": 8440,
+    "干将": 8429,
 }
 
 DEFAULT_AGENT_PORT = 8420
@@ -42,6 +49,39 @@ DEFAULT_TIMEOUT = 600
 from . import sanitize_project_name
 
 _sanitize_project_name = sanitize_project_name  # 兼容别名
+
+
+# ── HTTP 连接池（按 port 复用 TCP） ────────────────────
+_agent_conn_pool: dict[int, http.client.HTTPConnection] = {}
+_agent_conn_last: dict[int, float] = {}
+
+def _get_agent_conn(port: int, timeout: int) -> http.client.HTTPConnection:
+    now = time.time()
+    conn = _agent_conn_pool.get(port)
+    if conn is not None:
+        last = _agent_conn_last.get(port, 0)
+        # 超过 30 秒复用重建
+        if now - last > 30:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        else:
+            _agent_conn_last[port] = now
+            return conn
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    _agent_conn_pool[port] = conn
+    _agent_conn_last[port] = now
+    return conn
+
+
+def _close_agent_conn(port: int) -> None:
+    conn = _agent_conn_pool.pop(port, None)
+    if conn:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ── HTTP 调用 Agent ─────────────────────────────────────
@@ -68,48 +108,44 @@ def call_agent(
     if port is None:
         port = AGENT_PORTS.get(agent, DEFAULT_AGENT_PORT)
 
-    url = f"http://127.0.0.1:{port}/ask"
     payload = json.dumps({"message": task, "session": True}).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
 
     max_response_size = 1 * 1024 * 1024  # 1 MB
     chunk_size = 64 * 1024  # 64 KB
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            chunks = []
-            total = 0
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_response_size:
-                    max_read = max_response_size - (total - len(chunk))
-                    if max_read > 0:
-                        chunks.append(chunk[:max_read])
-                    while resp.read(chunk_size):
-                        pass
-                    body = b"".join(chunks).decode()
-                    body = body[:max_response_size] + "\n\n[TRUNCATED: Response exceeded 1MB limit]"
-                    break
-                chunks.append(chunk)
-            else:
-                body = b"".join(chunks).decode()
-
+    def _do_request() -> dict:
+        conn = _get_agent_conn(port, timeout)
+        try:
+            conn.request("POST", "/ask", body=payload, headers=headers)
+            resp = conn.getresponse()
+            body_b = resp.read()
             if parse_reply:
                 try:
-                    output = json.loads(body).get("reply", body[:500])
+                    output = json.loads(body_b).get("reply", body_b[:500].decode(errors='replace'))
                 except json.JSONDecodeError:
-                    output = body[:500]
+                    output = body_b[:500].decode(errors='replace')
             else:
-                output = body[:500]
+                output = body_b[:500].decode(errors='replace')
             return {"status": "ok", "output": output}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:200]
-        return {"status": "failed", "error": f"HTTP {e.code}: {body}"}
+        except (http.client.HTTPException, BrokenPipeError, ConnectionResetError, ConnectionRefusedError, socket.timeout) as e:
+            _close_agent_conn(port)
+            raise e
+
+    try:
+        return _do_request()
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        err_msg = str(e)
+        if any(kw in err_msg for kw in ("Remote end closed", "Connection refused", "Connection reset", "Broken pipe", "timeout")):
+            import time as _time
+            _time.sleep(1)
+            try:
+                result = _do_request()
+                result["retried"] = True
+                return result
+            except Exception:
+                pass
+        return {"status": "failed", "error": err_msg}
 
 
 # ── 工作流加载 ───────────────────────────────────────────

@@ -29,6 +29,7 @@ from daemon import (
     run_workflow,
     start_api_server,
 )
+from daemon.log import C_OK, C_WARN
 from daemon import send_alert as _daemon_alert
 from daemon.config import get_default_project
 
@@ -134,6 +135,12 @@ def _validate_plan_steps(steps: list, allow_shell: bool = False) -> list[str]:
             "Forge",
             "forge",
             "standard",
+            "波塞冬",
+            "Poseidon",
+            "CC",
+            "Gcoder-CC",
+            "X",
+            "Gcoder-X",
         }
         for i, step in enumerate(steps):
             executor = step.get("executor", "标准版")
@@ -151,7 +158,7 @@ RULES (strict, no exceptions):
 1. Each step MUST have: id, executor, type (optional, default: regular), title, task
 2. Only use these fields per step: id, executor, fallback_agents, title, task, description, input_file, output_file, depends_on, type, optional, command (for shell type)
 3. For incremental builds: step-2 depends_on step-1, uses input_file/output_file
-4. Use executors by role: 重锤(engineering/coding), 绘墨(UI/design), 大黄蜂(testing), Laser(final QA)
+4. Use executors by role: 重锤(engineering/coding), 绘墨(UI/design), 大黄蜂(testing), Laser(final QA), CC(Claude Code style 7-stage workflow), X(Codex style secure editing)
 5. First step: NO input_file or depends_on
 6. Last step: type: review for code review
 7. Add type: shell for command-only steps (use command field instead of task)
@@ -176,7 +183,7 @@ Generate the YAML now."""
     result = call_agent(
         "标准版",
         f"{_PLAN_SYSTEM_PROMPT}\n\n{prompt}",
-        timeout=180,
+        timeout=None,
     )
 
     if result["status"] == "failed":
@@ -239,8 +246,6 @@ Generate the YAML now."""
 
 
 def run_daemon(project, force=False, start_step=None):
-    from daemon import C_OK, C_WARN
-
     ensure_pid()
     log(f"🚀 Glink Daemon v0.5 | 项目: {project}")
     start_api_server()

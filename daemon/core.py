@@ -178,6 +178,45 @@ def find_resume_point(project_name, steps, force_start=False):
     return len(steps), skipped
 
 
+# ── 战甲心跳缓存（后台 TCP 扫描，15s 间隔）──────────────────
+# 避免每次 /status/agents 都 HTTP 探活（11 个 agent 慢 33s）
+_agent_heartbeat: dict[str, dict] = {}
+_HEARTBEAT_CACHE_TTL = 15
+
+
+def _probe_port(port: int, timeout: float = 1.0) -> bool:
+    """TCP 端口连通检测，比 HTTP GET /health 快 10 倍"""
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(("127.0.0.1", port))
+        return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+
+def _heartbeat_scan():
+    """后台线程入口：每 _HEARTBEAT_CACHE_TTL 秒扫描全部 agent"""
+    while True:
+        for name, port in AGENT_PORTS.items():
+            online = _probe_port(port)
+            _agent_heartbeat[name] = {
+                "online": online,
+                "last_seen": time.time(),
+                "port": port,
+            }
+        time.sleep(_HEARTBEAT_CACHE_TTL)
+
+
+# 启动心跳扫描（非阻塞，主进程 fork 后自动运行）
+_heartbeat_thread = threading.Thread(target=_heartbeat_scan, daemon=True)
+_heartbeat_thread.start()
+
+
 def probe_agent(agent):
     port = AGENT_PORTS.get(agent, 8420)
     url = f"http://127.0.0.1:{port}/health"
@@ -208,7 +247,11 @@ def resolve_agent(agent, fallback_agents=None):
     )
 
 
-def call_agent(agent, task_desc, timeout=600):
+def call_agent(agent, task_desc, timeout=None):
+    """调用 agent，调用前查心跳缓存（重写版本，注入结果回流）。"""
+    heartbeat = _agent_heartbeat.get(agent)
+    if heartbeat and not heartbeat["online"]:
+        return {"status": "failed", "error": f"Agent [{agent}] 不在线 (端口 {heartbeat['port']})", "output": ""}
     return _call_agent(agent, task_desc, timeout=timeout)
 
 
@@ -853,8 +896,8 @@ def _run_parallel(project_name, workflow, force_start=False, start_step=None):
         clear_checkpoint(project_name)
         return True
 
-    parallel_timeout = workflow.get("timeout", 600)  # 工作流级并行超时
-    step_timeout = workflow.get("step_timeout", 300)  # 单步超时（秒）
+    parallel_timeout = workflow.get("timeout")  # 工作流级并行超时（默认无超时）
+    step_timeout = workflow.get("step_timeout")  # 单步超时（默认无超时）
     log(f"并行执行 → {total} 步，从 Step-{start_index + 1} 开始")
     log(
         f"配置: max_concurrent={get_max_concurrent_steps()}, "
@@ -927,7 +970,7 @@ def _run_parallel(project_name, workflow, force_start=False, start_step=None):
         # Process futures as they complete
         while pending_futures and not cancel_event.is_set():
             elapsed = time.time() - _parallel_start
-            if elapsed >= parallel_timeout:
+            if parallel_timeout is not None and elapsed >= parallel_timeout:
                 log_err(f"并行执行超时 ({parallel_timeout}s)，{len(pending_futures)} 步未完成")
                 for pfut in list(pending_futures):
                     pfut.cancel()
