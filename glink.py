@@ -7,13 +7,18 @@ Glink v0.1 — 工作流调度引擎
 import os
 import sys
 
-# Main Bus 路径
-BUS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bus")
-sys.path.insert(0, BUS_DIR)
-
-from agent_client import AGENT_PORTS, call_agent, load_workflow
-from main_bus import status as bus_status
-from main_bus import write as bus_write
+try:
+    # pip install mode
+    from bus.agent_client import AGENT_PORTS, call_agent, load_workflow
+    from bus.main_bus import status as bus_status
+    from bus.main_bus import write as bus_write
+except ImportError:
+    # standalone script mode
+    BUS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bus")
+    sys.path.insert(0, BUS_DIR)
+    from agent_client import AGENT_PORTS, call_agent, load_workflow
+    from main_bus import status as bus_status
+    from main_bus import write as bus_write
 
 
 def execute_step(step, project, context):

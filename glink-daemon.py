@@ -8,26 +8,40 @@ import os
 import sys
 import time
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE_DIR)
-sys.path.insert(0, os.path.join(BASE_DIR, "bus"))
-
-
-import yaml
-
-# 注册 Bus 告警处理器（write 失败时通过 Reporter 通知）
-from bus.main_bus import _set_alert_handler
-from daemon import (
-    cleanup_pidfile,
-    ensure_pid,
-    get_reporter,
-    load_workflow,
-    log,
-    log_err,
-    log_ok,
-    log_warn,
-    run_workflow,
-    start_api_server,
+try:
+    # pip install mode
+    import yaml
+    from bus.main_bus import _set_alert_handler
+    from daemon import (
+        cleanup_pidfile,
+        ensure_pid,
+        get_reporter,
+        load_workflow,
+        log,
+        log_err,
+        log_ok,
+        log_warn,
+        run_workflow,
+        start_api_server,
+    )
+except ImportError:
+    # standalone script mode
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, BASE_DIR)
+    sys.path.insert(0, os.path.join(BASE_DIR, "bus"))
+    import yaml
+    from bus.main_bus import _set_alert_handler
+    from daemon import (
+        cleanup_pidfile,
+        ensure_pid,
+        get_reporter,
+        load_workflow,
+        log,
+        log_err,
+        log_ok,
+        log_warn,
+        run_workflow,
+        start_api_server,
 )
 from daemon import send_alert as _daemon_alert
 from daemon.config import get_default_project
