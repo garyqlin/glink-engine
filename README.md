@@ -1,8 +1,114 @@
 # Glink
 
-> **Multi-Agent. One Bus. Zero Friction.**
+> **Multi-Agent Workflow Engine. One Bus. API-First.**
 
-Glink is a lightweight orchestration engine that turns your AI agents into a **collaborative assembly line**. Define a workflow in YAML, and Glink routes each step to the right agent — passing context, handling failures, and logging every heartbeat onto a shared JSONL blackboard. No databases, no message queues, no external dependencies.
+Glink is a **programmatic orchestration engine** for multi-agent collaboration — it has **no human interface**. Your agents use Glink's API to organize and schedule complex workflows across multiple AI agents, passing context, handling failures, and logging every heartbeat onto a shared JSONL blackboard.
+
+---
+
+## How It Works
+
+```
+  Human
+    │
+    ▼
+  Orchestrator Agent (your "main" agent)
+    │  calls Glink API (POST /run, GET /status)
+    ▼
+┌──────────────────────────────────────────────────┐
+│           Glink Engine (daemon :8426)            │
+│  Routes workflow steps │ picks agents │ logs     │
+│  Gate verification │ retry loop │ checkpoint     │
+└──┬────────┬────────┬────────────────────────────┘
+   │        │        │
+   ▼        ▼        ▼
+Agent A  Agent B  Agent C  (your specialized agents)
+```
+
+Glink is not a tool for humans to type commands into. It's a **backend engine** that lives behind your orchestrator agent — call it, don't click it.
+
+---
+
+## Quick Install
+
+```bash
+pip install git+https://github.com/garyqlin/glink-engine.git
+```
+
+Or clone and run in-place:
+
+```bash
+git clone https://github.com/garyqlin/glink-engine.git
+cd glink-engine
+pip install -e .
+```
+
+---
+
+## How to Use It (Agent-to-Agent, Not Human-to-CLI)
+
+### 1. Start the daemon
+
+```bash
+# Start Glink daemon in API-server mode (no workflow runs automatically)
+python3 glink-daemon.py --serve
+# → Listening on http://127.0.0.1:8426
+```
+
+### 2. Your orchestrator agent calls Glink
+
+From your orchestrator agent's code:
+
+```python
+import requests
+
+# Run a workflow by name — Glink handles step-by-step dispatch
+resp = requests.post("http://127.0.0.1:8426/run", json={
+    "workflow": "sandbox-builder",
+    "force": False      # resume from last checkpoint
+})
+
+# Check progress
+status = requests.get("http://127.0.0.1:8426/status").json()
+```
+
+Or use the Python SDK (bundled):
+
+```python
+from bus.main_bus import status, write
+from daemon.core import run_workflow
+
+# Your orchestrator code — this is how a main agent uses Glink
+result = run_workflow("my-workflow", context={"task": "..."})
+```
+
+### 3. Define a workflow YAML
+
+Workflows live in `workflows/`:
+
+```yaml
+name: research-pipeline
+version: 1.0
+
+steps:
+  - id: step-1
+    executor: Researcher
+    title: Gather data
+    description: Collect and summarize the latest information
+
+  - id: step-2
+    executor: Analyst
+    title: Analyze
+    description: Process data and identify patterns
+    depends_on: [step-1]
+
+  - id: step-3
+    executor: Writer
+    title: Generate report
+    description: Produce final report from analysis
+    depends_on: [step-2]
+    fallback_agents: [Analyst]
+```
 
 ---
 
@@ -21,91 +127,31 @@ Glink is a lightweight orchestration engine that turns your AI agents into a **c
          Append-only event log — every agent reads & writes
 
      ┌─────────────────────────────────────────────────┐
-     │        Glink Engine (daemon + API)              │
+     │        Glink Engine (daemon :8426)              │
      │  Routes steps → picks agents → logs results     │
-     │  Checkpoints on every success → crash-survive   │
+     │  Checkpoints → retry loop → gate verification   │
      └─────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Quick Start
+## Key Concepts
 
-```bash
-# Clone & go
-cd glink
-
-# Run a workflow (resumes from last checkpoint automatically)
-python3 glink-daemon.py sandbox-builder
-
-# Force restart from step 1
-python3 glink-daemon.py sandbox-builder --force
-
-# Jump to a specific step
-python3 glink-daemon.py sandbox-builder --step 4
-
-# Serve-only mode (API without running workflow)
-python3 glink-daemon.py --serve
-
-# Dashboard
-open http://127.0.0.1:8426
-```
-
----
-
-## Features
-
-| Feature | Description |
-|:--------|:------------|
-| **YAML Workflows** | Define steps, agents, dependencies, and fallbacks in one file |
-| **Main Bus** | JSONL blackboard — append-only, agent-agnostic, replayable |
-| **Smart Routing** | Primary agent down? Auto-fallback to the next in line |
-| **Checkpoint Resume** | Crash mid-workflow? Restart picks up exactly where it left off |
-| **Dependency Graph** | Steps can `depends_on` each other; Glink handles ordering |
-| **Retry Loop** | Auto-retry failed steps (configurable, default 2×) |
-| **HTTP API + SSE** | Live status, agent health, and event stream on `:8426` |
-| **Healthcheck Cron** | Self-healing — daemon restarts on crash, alerts via webhook |
-| **Zero Deps** | One Python file + one JSONL file. No pip install needed |
-
----
-
-## Workflow Example
-
-```yaml
-name: sandbox-builder
-version: 0.2.0
-
-global_context: |
-  Three.js r160 + Cannon-es. Output: single HTML file.
-
-steps:
-  - id: step-1
-    executor: Agent A
-    title: Scene setup
-    description: Three.js scene + camera + lights + render loop
-    output_file: projects/sandbox-builder/scene.html
-
-  - id: step-2
-    executor: Agent A
-    title: Block placement
-    description: Raycasting + grid snap + 6 materials
-    input_file: projects/sandbox-builder/scene.html
-    output_file: projects/sandbox-builder/blocks.html
-
-  - id: step-5
-    executor: Agent B
-    title: Glassmorphism UI
-    description: Toolbar + score panel with backdrop-filter
-    fallback_agents: [Agent A, Default]
-    input_file: projects/sandbox-builder/blocks.html
-    output_file: projects/sandbox-builder/ui.html
-```
+| Concept | What it means |
+|:--------|:--------------|
+| **Orchestrator Agent** | Your "main" agent that calls Glink's API. Glink has no human UI — your main agent is the human's interface. |
+| **Workflow YAML** | `workflows/*.yaml` — define step sequences, agent assignments, dependencies, and fallback agents |
+| **Main Bus** | JSONL blackboard — append-only event log that every agent can read/write |
+| **Gate Verification** | Each step can have gate conditions (`file_exists`, `output_contains`) that must pass before proceeding |
+| **Checkpoint** | Every completed step saves a checkpoint; crash recovery resumes exactly where you left off |
+| **Retry Loop** | Failed steps auto-retry with configurable max attempts and injected failure feedback |
+| **Loop Engineering** | When a step fails, Glink injects the failure context into the retry prompt so the agent learns from its mistake |
 
 ---
 
 ## Agent Roster
 
-Define your own agents in `glink-daemon.py` — map each to a port, a name, and a specialty.
+Register your agents in `glink-daemon.py` or `bus/agent_client.py`:
 
 ```python
 AGENT_PORTS = {
@@ -115,29 +161,30 @@ AGENT_PORTS = {
 }
 ```
 
-Workflow steps reference agents by name; the daemon assigns the work automatically.
+Workflow steps reference agents by name; Glink routes the task automatically.
 
 ---
 
 ## API Reference
 
-| Method | Endpoint | Description |
-|:-------|:---------|:------------|
-| `GET` | `/health` | Liveness check → `{"status":"ok"}` |
-| `GET` | `/status` | Full project status + step-by-step progress |
-| `GET` | `/status/agents` | Which agents are online right now |
-| `GET` | `/status/events?n=20` | Last N Bus events |
-| `POST` | `/restart` | Resume from last checkpoint |
-| `POST` | `/restart?force` | Force restart from step 1 |
-| `POST` | `/restart?step=N` | Jump to step N |
+| Method | Endpoint | Called by | Description |
+|:-------|:---------|:----------|:------------|
+| `GET` | `/health` | Orchestrator / monitor | Liveness check → `{"status":"ok"}` |
+| `GET` | `/status` | Orchestrator | Full project status + step-by-step progress |
+| `GET` | `/status/agents` | Orchestrator | Which agents are online right now |
+| `GET` | `/status/events?n=20` | Orchestrator | Last N Bus events |
+| `POST` | `/run` | Orchestrator | Run a workflow (`{"workflow":"name", "force":bool}`) |
+| `POST` | `/restart` | Orchestrator | Resume from last checkpoint |
+| `POST` | `/restart?force` | Orchestrator | Force restart from step 1 |
+| `POST` | `/restart?step=N` | Orchestrator | Jump to step N |
 
 ---
 
-## Real-World Result
+## Requirements
 
-**sandbox-builder** — 10 steps × 5 agents → 97 KB / 2,751 lines of playable HTML.
-
-Three.js sandbox game with physics, procedural textures, glassmorphism UI, save/load, scoring, and achievements — built entirely by agent collaboration, no human code touched.
+- Python ≥ 3.11
+- No external databases, message queues, or containers needed
+- Works with any LLM provider (OpenAI-compatible API)
 
 ---
 
