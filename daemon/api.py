@@ -8,18 +8,48 @@ import sys
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
+from threading import Semaphore, Thread
 
 from .checks import self_restart
 from .config import get_config as config_get
 from .config import get_server_port
-from .core import AGENT_PORTS, load_workflow, probe_agent
+from .core import AGENT_PORTS, call_agent, load_workflow, probe_agent
 from .log import get_reporter, log_warn
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "bus"))
-from bus import main_bus
+import contextlib
+
 from bus.agent_client import load_workflow as _shared_load_workflow
-from bus.project_memory import GLK_ROOT, _glk_path, sanitize, project_init, project_list, project_get, project_read_context, project_update_context
+from bus.project_memory import (
+    project_get,
+    project_init,
+    project_list,
+    project_read_context,
+    project_update_context,
+    set_result,
+)
+
+from bus import main_bus
+
+# ── Agent 图标映射（Dashboard 显示用）──
+# 可通过 local.yaml 或 GLINK_AGENT_ICONS 环境变量（JSON 格式）覆盖
+# 例如: export GLINK_AGENT_ICONS='{"agent-a":"🔨","agent-b":"🎨"}'
+_AGENT_ICON: dict[str, str] = {}
+_icons_env = os.environ.get("GLINK_AGENT_ICONS", "")
+if _icons_env:
+    with contextlib.suppress(json.JSONDecodeError):
+        _AGENT_ICON = json.loads(_icons_env)
+
+# ── 并发令牌桶：限制对同一 agent 的并发线程数 ──────
+_AGENT_CONCURRENT_MAX = 3  # 同 agent 最多同时 3 个任务
+_agent_semaphores: dict[str, Semaphore] = {}
+
+
+def _get_agent_sem(agent: str) -> Semaphore:
+    if agent not in _agent_semaphores:
+        _agent_semaphores[agent] = Semaphore(_AGENT_CONCURRENT_MAX)
+    return _agent_semaphores[agent]
+
 
 _REST_PROJECT: dict[str, str] = {"name": "testglink"}
 
@@ -90,6 +120,78 @@ class DashHandler(BaseHTTPRequestHandler):
             )
             Thread(target=lambda: self_restart(proj, force=is_force), daemon=True).start()
 
+        # ── /task/assign — 轻量任务走廊 ─────────────────────────
+        elif path == "/task/assign":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+            agent = data.get("agent", "")
+            task = data.get("task", "")
+            if not agent or not task:
+                self.send_json({"error": "'agent' and 'task' are required"}, 400)
+                return
+            project_name = data.get("project", f"task-{agent}-{int(time.time())}")
+            task_id = f"t_{int(time.time() * 1000000)}"
+            timeout = data.get("timeout")  # 不设默认超时
+            project_init(project_name, context=f"Task: {task}\nAgent: {agent}\nAssigned: {datetime.now().isoformat()}")
+            main_bus.write(project_name, "task.assigned", agent, {"task_id": task_id, "task": task})
+            main_bus.write(project_name, "task.started", agent, {"task_id": task_id, "task": task, "title": task[:60]})
+            # 后台线程执行（不阻塞 8426 端口）
+            from threading import Thread as _Thr
+
+            _sem = _get_agent_sem(agent)
+
+            def _execute():
+                # 令牌桶：排队等待，限制同 agent 并发数
+                acquired = _sem.acquire(blocking=True, timeout=60)
+                if not acquired:
+                    err = f"agent [{agent}] 任务队列已满，排队超时"
+                    main_bus.write(project_name, "task.failed", agent, {"task_id": task_id, "error": err})
+                    set_result(project_name, agent, err[:500], success=False)
+                    return
+                try:
+                    result = call_agent(agent, task, timeout=timeout)
+                    if result.get("status") == "ok":
+                        output = result.get("output", "")
+                        main_bus.write(
+                            project_name,
+                            "task.completed",
+                            agent,
+                            {"task_id": task_id, "output_preview": str(output)[:300]},
+                        )
+                        set_result(project_name, agent, str(output)[:500], success=True)
+                    else:
+                        err = result.get("error", "unknown error")
+                        main_bus.write(project_name, "task.failed", agent, {"task_id": task_id, "error": err})
+                        set_result(project_name, agent, err[:500], success=False)
+                    project_update_context(
+                        project_name, event_type="task.completed", agent=agent, detail=result.get("output", "")[:200]
+                    )
+                except Exception as e:
+                    import traceback
+
+                    err = f"task crash: {e}"
+                    log_warn(f"_execute 异常: {traceback.format_exc()}")
+                    main_bus.write(project_name, "task.failed", agent, {"task_id": task_id, "error": err})
+                    set_result(project_name, agent, err[:500], success=False)
+                finally:
+                    _sem.release()
+
+            _Thr(target=_execute, daemon=True).start()
+            self.send_json(
+                {
+                    "status": "processing",
+                    "task_id": task_id,
+                    "project": project_name,
+                    "agent": agent,
+                    "result_url": f"/bus/latest?project={project_name}",
+                }
+            )
+
         # ── Project Memory POST 端点（共享记忆） ────────────────
         elif path == "/project/create":
             length = int(self.headers.get("Content-Length", 0))
@@ -106,6 +208,29 @@ class DashHandler(BaseHTTPRequestHandler):
             context = data.get("context", "")
             result = project_init(project_id, context)
             self.send_json(result)
+
+        elif path == "/write":
+            """/write — 写入一条事件到 Main Bus（glink_bridge 调用）"""
+            # main_bus 已在模块级导入（line 21），此处不用重复 import
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+            project = data.get("project", "default")
+            agent = data.get("agent", "unknown")
+            event_type = data.get("type", "task.completed")
+            # payload 包含 summary/lessons/tags 等
+            payload = {k: v for k, v in data.items() if k not in ("project", "agent", "type")}
+            main_bus.write(
+                project_name=project,
+                event_type=event_type,
+                agent=agent,
+                data=payload,
+            )
+            self.send_json({"status": "ok"})
 
         elif path.startswith("/project/"):
             parts = path.split("/")
@@ -133,6 +258,39 @@ class DashHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "invalid path"}, 400)
 
+        # ═══════════════════════════════════════════════════════
+        # Glink Tool 端點（POST）
+        # ═══════════════════════════════════════════════════════
+        elif path.startswith("/tool/"):
+            tool_name = path.replace("/tool/", "")
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+
+            action = data.get("action", "")
+            params = data.get("params", {})
+
+            try:
+                if tool_name in ("game", "persona"):
+                    # tool_name → 實際模塊名映射
+                    MODULE_MAP = {"game": "game_tool", "persona": "glink_persona_tool"}
+                    tools_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools")
+                    if tools_dir not in sys.path:
+                        sys.path.insert(0, tools_dir)
+                    import importlib
+                    mod = importlib.import_module(MODULE_MAP[tool_name])
+                    result = mod.execute(action, params)
+                    self.send_json(result)
+                else:
+                    self.send_json({"error": f"Unknown tool: {tool_name}"}, 404)
+            except Exception as e:
+                import traceback
+                self.send_json({"error": str(e), "traceback": traceback.format_exc()}, 500)
+
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -145,7 +303,8 @@ class DashHandler(BaseHTTPRequestHandler):
         proj = get_project()
 
         if path == "/status":
-            self.send_json(self._build_status(proj))
+            project_name = qstr.get("project", proj)
+            self.send_json(self._build_status(project_name))
 
         elif path == "/status/agents":
             agents_out = [{"name": n, "port": p, "online": probe_agent(n)[0]} for n, p in AGENT_PORTS.items()]
@@ -158,7 +317,8 @@ class DashHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": 'query param "n" must be integer'}, 400)
                 return
             n = min(max(n, 1), 1000)
-            events = main_bus.read(proj, limit=n)
+            project_name = qstr.get("project", proj)
+            events = main_bus.read(project_name, limit=n)
             s_map = {
                 "task.completed": "ok",
                 "task.failed": "fail",
@@ -178,21 +338,24 @@ class DashHandler(BaseHTTPRequestHandler):
             self.send_json({"events": ev_out})
 
         elif path == "/bus/latest":
-            events = main_bus.read(proj, limit=1)
-            self.send_json({"event": events[-1] if events else None})
+            project_name = qstr.get("project", proj)
+            events = main_bus.read(project_name, limit=1)
+            self.send_json({"project": project_name, "event": events[-1] if events else None})
 
         elif path == "/health":
             self.send_json({"status": "ok", "service": "glink-daemon-v0.5"})
 
         elif path == "/events/stream":
-            self._handle_sse(proj)
+            project_name = qstr.get("project", proj)
+            self._handle_sse(project_name)
 
         elif path == "/intel/step":
             stage = qstr.get("stage", "")
             if not stage:
                 self.send_json({"error": "need ?stage=xxx"}, 400)
                 return
-            events = main_bus.read(proj, limit=2000)
+            project_name = qstr.get("project", proj)
+            events = main_bus.read(project_name, limit=2000)
             related = [e for e in events if e.get("stage") == stage]
             completions = [e for e in related if e["type"] == "task.completed"]
             failures = [e for e in related if e["type"] == "task.failed"]
@@ -200,7 +363,7 @@ class DashHandler(BaseHTTPRequestHandler):
             started = [e for e in related if e["type"] == "task.started"]
             step_info = {}
             try:
-                wf = _shared_load_workflow(proj)
+                wf = _shared_load_workflow(project_name)
                 for idx, s in enumerate(wf.get("steps", [])):
                     if s.get("stage", f"step-{idx + 1}") == stage:
                         step_info = s
@@ -259,19 +422,7 @@ class DashHandler(BaseHTTPRequestHandler):
             agents_out = []
             for name, port in AGENT_PORTS.items():
                 online, _ = probe_agent(name)
-                label = (
-                    "🛡️"
-                    if name in ("标准版", "扎古")
-                    else "🔨"
-                    if name == "重锤"
-                    else "🎨"
-                    if name == "绘墨"
-                    else "🐝"
-                    if name == "大黄蜂"
-                    else "🔬"
-                    if name == "Laser"
-                    else "⚒️"
-                )
+                label = _AGENT_ICON.get(name, "🤖")
                 agents_out.append(
                     {
                         "name": name,
@@ -290,7 +441,8 @@ class DashHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": 'query param "n" must be integer'}, 400)
                 return
             limit = min(max(limit, 1), 1000)
-            events = main_bus.read(proj, limit=limit)
+            project_name = qstr.get("project", proj)
+            events = main_bus.read(project_name, limit=limit)
             s_map = {
                 "task.completed": "ok",
                 "task.failed": "fail",
@@ -314,7 +466,7 @@ class DashHandler(BaseHTTPRequestHandler):
                         "title": ((e.get("data", {}) or {}).get("title", "")),
                     }
                 )
-            self.send_json({"project": proj, "total": len(timeline), "events": timeline})
+            self.send_json({"project": project_name, "total": len(timeline), "events": timeline})
 
         elif path == "/reporter":
             r = get_reporter()
@@ -322,14 +474,6 @@ class DashHandler(BaseHTTPRequestHandler):
             has_rep = hasattr(r, "reporters")
             channels = [type(rep).__name__ for rep in r.reporters] if has_rep else [rtype]
             self.send_json({"type": rtype, "channels": channels})
-
-        # ── Project Memory API（共享记忆） ─────────────────────
-        elif path == "/project/list":
-            try:
-                projects = project_list()
-                self.send_json({"projects": projects})
-            except Exception as e:
-                self.send_json({"error": str(e)}, 500)
 
         elif path.startswith("/project/"):
             # 路由: /project/<action>/<project_id>

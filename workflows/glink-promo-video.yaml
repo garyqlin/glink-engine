@@ -1,0 +1,176 @@
+project:
+  name: glink-promo-video
+  title: 🎬 Glink 产品宣传视频 — 多战甲协作合成
+  goal: 用 html-video 引擎 + 多战甲分工协作，制作一条 30 秒的 Glink 产品宣传 MP4 视频
+
+global_context: |
+  你是一个视频制作团队，使用 html-video 引擎（./html-video/）制作 Glink 产品宣传视频。
+
+  ## 背景
+  Glink 是一个轻量级多 Agent 编排引擎，核心：Multi-Agent, One Bus, Zero Friction。
+  GitHub: github.com/garyqlin/glink-engine
+
+  ## 技术约束
+  - html-video 项目在 ./html-video/
+  - 使用现成模板（templates/ 目录）：frame-electric-studio、frame-swiss-grid、frame-kinetic-type、frame-glitch-title
+  - 模板基于 HTML + CSS + GSAP 动画
+  - 所有场景文件输出到 ./html-video/glink-promo/
+  - 最终用 pnpm exec html-video render 输出 MP4
+
+steps:
+  # ── Step 1: agent-a调研 ──
+  - id: step-1
+    executor: agent-a
+    title: 调研 Glink 宣传视频定位与结构
+    description: |-
+      调研产出 30 秒 Glink 产品宣传视频的结构建议。
+      核心卖点："Multi-Agent, One Bus, Zero Friction"。
+      输出 JSON 到 ./html-video/glink-promo/research.json，包含：
+      - title: 视频标题
+      - structure: 场景列表（每个场景含 name, duration_seconds, text_lines, visual_style）
+      - recommended_templates: 推荐用的模板名称列表
+    output_file: ./html-video/glink-promo/research.json
+
+  # ── Step 2: agent-d设计视觉方案 ──
+  - id: step-2
+    executor: agent-d
+    title: 设计 Glink 宣传视频视觉方案
+    description: |-
+      先读 step-1 的调研结果（./html-video/glink-promo/research.json），
+      输出设计方案的 JSON 到 ./html-video/glink-promo/design.json，包含：
+      - color_scheme: 主色/辅色/强调色（HEX）
+      - typography: 字体选择
+      - scenes: 每个场景的布局描述和动画风格
+      - motion_guidelines: 运动/转场指南
+    output_file: ./html-video/glink-promo/design.json
+    depends_on: [step-1]
+
+  # ── Step 3: agent-b编写场景 1（开场） ──
+  - id: step-3
+    executor: agent-b
+    title: 编写开场场景 HTML
+    description: |-
+      先读 design.json（./html-video/glink-promo/design.json）了解视觉方案。
+      使用 frame-electric-studio 模板（./html-video/templates/frame-electric-studio/）编写场景1。
+
+      场景1 — "Multi-Agent. One Bus."
+      深蓝科技风背景，中心大字 "Multi-Agent. One Bus."（主标题），下方小字 "Zero Friction"（副标题），
+      左上角或顶部分别放 "Glink" logo/文字标记。
+      使用 GSAP 动画：标题从左到右渐入 + 发光效果。
+
+      输出 ./html-video/glink-promo/scene-1.html
+
+      参考模板目录结构：查看 frame-electric-studio/index.html 了解变量和插槽用法。
+    output_file: ./html-video/glink-promo/scene-1.html
+    depends_on: [step-2]
+
+  # ── Step 4: agent-b编写场景 2（痛点） ──
+  - id: step-4
+    executor: agent-b
+    title: 编写痛点场景 HTML
+    description: |-
+      使用 frame-swiss-grid 模板（./html-video/templates/frame-swiss-grid/）编写场景2。
+
+      场景2 — "Your agents work alone"
+      格栅布局展示 4 个孤立 agent 图标（各自为政），每个灰暗色调，用 X/叉号连接线表示无法协作。
+      动画：每个图标 0.5s 间隔渐入。
+      底部小字："No communication. No coordination."
+
+      输出 ./html-video/glink-promo/scene-2.html
+
+      先读 frame-swiss-grid/index.html 了解模板用法。
+    output_file: ./html-video/glink-promo/scene-2.html
+    depends_on: [step-2]
+
+  # ── Step 5: agent-z 编写场景 3（解决方案） ──
+  - id: step-5
+    executor: agent-z
+    title: 编写解决方案场景 HTML
+    description: |-
+      使用 frame-kinetic-type 模板（./html-video/templates/frame-kinetic-type/）编写场景3。
+
+      场景3 — "Glink connects them all"
+      动态文字动画：单词依次弹出 "Glink" → "connects" → "them" → "all"。
+      背景从深蓝渐变为亮青色，动画节奏从慢到快（紧迫感转为释放感）。
+      每个单词弹出时带发光 + 缩放效果。
+
+      输出 ./html-video/glink-promo/scene-3.html
+
+      先读 frame-kinetic-type/index.html 了解模板。
+    output_file: ./html-video/glink-promo/scene-3.html
+    depends_on: [step-2]
+
+  # ── Step 6: agent-x 编写场景 4（结尾CTA） ──
+  - id: step-6
+    executor: agent-x
+    title: 编写结尾场景 HTML
+    description: |-
+      使用 frame-glitch-title 模板（./html-video/templates/frame-glitch-title/）编写场景4。
+
+      场景4 — Call to Action
+      中心大标题 "Glink Engine"
+      副标题 "github.com/garyqlin/glink-engine"
+      结尾 chroma aberration glitch 效果 + 淡出。
+      最后 1 秒黑屏 + "Powered by Multi-Agent" 渐入。
+
+      输出 ./html-video/glink-promo/scene-4.html
+
+      先读 frame-glitch-title/index.html 了解模板。
+    output_file: ./html-video/glink-promo/scene-4.html
+    depends_on: [step-2]
+
+  # ── Step 7: agent-y 代码审查 ──
+  - id: step-7
+    executor: agent-y
+    type: review
+    title: 代码审查与修复
+    description: |-
+      审查所有场景 HTML 文件，检查：
+      1. HTML 结构合法性
+      2. CSS/JS 语法
+      3. GSAP 动画语法
+      4. 是否兼容 html-video 渲染引擎
+
+      文件：
+      - ./html-video/glink-promo/scene-1.html
+      - ./html-video/glink-promo/scene-2.html
+      - ./html-video/glink-promo/scene-3.html
+      - ./html-video/glink-promo/scene-4.html
+
+      对发现的问题直接修复，输出审查报告 ./html-video/glink-promo/lint-report.md。
+    output_file: ./html-video/glink-promo/lint-report.md
+    depends_on: [step-3, step-4, step-5, step-6]
+
+  # ── Step 8: agent-w 组装渲染 ──
+  - id: step-8
+    executor: agent-w
+    title: 组装所有场景并渲染 MP4
+    description: |-
+      第一步：读四个场景 HTML 文件确认内容。
+      第二步：创建一个主 index.html 文件串联四个场景，每个 7.5 秒，总长 30 秒。
+        用简单的 div 切换或 slideshow 方式串联。
+        包含自动播放逻辑：每 7.5 秒切换一个场景。
+      保存到 ./html-video/glink-promo/index.html
+
+      第三步：安装 @html-video/cli （如果未安装的话 pnpm install），
+      然后执行：
+        cd ./html-video && pnpm exec html-video render ./html-video/glink-promo/index.html --output ./html-video/output/glink-promo.mp4 --width 1920 --height 1080
+
+      确认输出文件存在后写组装报告 ./html-video/glink-promo/assembly-report.md
+    output_file: ./html-video/glink-promo/assembly-report.md
+    depends_on: [step-7]
+
+  # ── Step 9: default最终审核 ──
+  - id: step-9
+    executor: default
+    type: review
+    title: 最终审核
+    description: |-
+      审核整个项目产出：
+      1. 读 ./html-video/glink-promo/lint-report.md — 代码质量
+      2. 读 ./html-video/glink-promo/assembly-report.md — 组装情况
+      3. 确认 ./html-video/output/glink-promo.mp4 存在并检查文件大小
+      4. 给出最终评价（通过/需要修复）和总结
+      输出 ./html-video/glink-promo/final-review.md
+    output_file: ./html-video/glink-promo/final-review.md
+    depends_on: [step-8]

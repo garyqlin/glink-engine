@@ -12,36 +12,88 @@ agent_client — Glink 共享的 Agent 通讯与工作流加载模块
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
+import time
 from typing import Any
 
 import yaml
 
 # ── Agent 端口映射（唯一真源）────────────────────────────
-# 同一端口可有多个别名（如 标准版/扎古、代码臂/Forge/forge）
-AGENT_PORTS: dict[str, int] = {
-    "标准版": 8420,
-    "扎古": 8420,
-    "重锤": 8431,
-    "绘墨": 8432,
-    "大黄蜂": 8434,
-    "Laser": 8435,
-    "代码臂": 8436,
-    "Forge": 8436,
-    "forge": 8436,
-}
+# 从环境变量 GLINK_AGENT_PORTS 加载（JSON 格式），未设置时使用通用默认值。
+# 也可在 glink 根目录放 glink.local.yaml（被 .gitignore 排除），即可本地覆盖。
+# 同一端口可有多个别名（如 "agent-alpha": 9001, "agent-a": 9001）
 
-DEFAULT_AGENT_PORT = 8420
-DEFAULT_TIMEOUT = 600
+_GLINK_LOCAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "glink.local.yaml")
+
+
+def _load_agent_ports() -> dict[str, int]:
+    # 优先级 1：环境变量
+    env = os.environ.get("GLINK_AGENT_PORTS", "")
+    if env:
+        try:
+            return json.loads(env)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # 优先级 2：本地配置文件（glink.local.yaml，被 gitignore）
+    if os.path.exists(_GLINK_LOCAL):
+        try:
+            with open(_GLINK_LOCAL) as f:
+                local_cfg = yaml.safe_load(f) or {}
+                if "agent_ports" in local_cfg:
+                    return local_cfg["agent_ports"]
+        except Exception:
+            pass
+
+    # 优先级 3：通用默认值（供国际版演示/开发使用）
+    return {
+        "default": 8000,
+    }
+
+
+AGENT_PORTS: dict[str, int] = _load_agent_ports()
+DEFAULT_AGENT_PORT = 8000
+DEFAULT_TIMEOUT = 3600
 
 # ── 项目名白名单（防 path traversal，从 bus/__init__.py 导入）──
+import contextlib
+
 from . import sanitize_project_name
 
 _sanitize_project_name = sanitize_project_name  # 兼容别名
+
+
+# ── HTTP 连接池（按 port 复用 TCP） ────────────────────
+_agent_conn_pool: dict[int, http.client.HTTPConnection] = {}
+_agent_conn_last: dict[int, float] = {}
+
+
+def _get_agent_conn(port: int, timeout: int) -> http.client.HTTPConnection:
+    now = time.time()
+    conn = _agent_conn_pool.get(port)
+    if conn is not None:
+        last = _agent_conn_last.get(port, 0)
+        # 超过 30 秒复用重建
+        if now - last > 30:
+            with contextlib.suppress(Exception):
+                conn.close()
+        else:
+            _agent_conn_last[port] = now
+            return conn
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    _agent_conn_pool[port] = conn
+    _agent_conn_last[port] = now
+    return conn
+
+
+def _close_agent_conn(port: int) -> None:
+    conn = _agent_conn_pool.pop(port, None)
+    if conn:
+        with contextlib.suppress(Exception):
+            conn.close()
 
 
 # ── HTTP 调用 Agent ─────────────────────────────────────
@@ -55,7 +107,7 @@ def call_agent(
     """HTTP 调用 agent 的 /ask 接口。
 
     Args:
-        agent:        Agent 名称（如 "重锤"、"Forge"）
+        agent:        Agent 名称（如 "agent-a"、"agent-b"）
         task:         发送给 Agent 的任务描述
         port:         显式端口；不传则查 AGENT_PORTS
         timeout:      请求超时秒数
@@ -68,48 +120,53 @@ def call_agent(
     if port is None:
         port = AGENT_PORTS.get(agent, DEFAULT_AGENT_PORT)
 
-    url = f"http://127.0.0.1:{port}/ask"
     payload = json.dumps({"message": task, "session": True}).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
 
-    max_response_size = 1 * 1024 * 1024  # 1 MB
-    chunk_size = 64 * 1024  # 64 KB
+    1 * 1024 * 1024  # 1 MB
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            chunks = []
-            total = 0
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_response_size:
-                    max_read = max_response_size - (total - len(chunk))
-                    if max_read > 0:
-                        chunks.append(chunk[:max_read])
-                    while resp.read(chunk_size):
-                        pass
-                    body = b"".join(chunks).decode()
-                    body = body[:max_response_size] + "\n\n[TRUNCATED: Response exceeded 1MB limit]"
-                    break
-                chunks.append(chunk)
-            else:
-                body = b"".join(chunks).decode()
-
+    def _do_request() -> dict:
+        conn = _get_agent_conn(port, timeout)
+        try:
+            conn.request("POST", "/ask", body=payload, headers=headers)
+            resp = conn.getresponse()
+            body_b = resp.read()
             if parse_reply:
                 try:
-                    output = json.loads(body).get("reply", body[:500])
+                    output = json.loads(body_b).get("reply", body_b[:500].decode(errors="replace"))
                 except json.JSONDecodeError:
-                    output = body[:500]
+                    output = body_b[:500].decode(errors="replace")
             else:
-                output = body[:500]
+                output = body_b[:500].decode(errors="replace")
             return {"status": "ok", "output": output}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:200]
-        return {"status": "failed", "error": f"HTTP {e.code}: {body}"}
+        except (
+            TimeoutError,
+            http.client.HTTPException,
+            BrokenPipeError,
+            ConnectionResetError,
+            ConnectionRefusedError,
+        ) as e:
+            _close_agent_conn(port)
+            raise e
+
+    try:
+        return _do_request()
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        err_msg = str(e)
+        if any(
+            kw in err_msg
+            for kw in ("Remote end closed", "Connection refused", "Connection reset", "Broken pipe", "timeout")
+        ):
+            import time as _time
+
+            _time.sleep(1)
+            try:
+                result = _do_request()
+                result["retried"] = True
+                return result
+            except Exception:
+                pass
+        return {"status": "failed", "error": err_msg}
 
 
 # ── 工作流加载 ───────────────────────────────────────────

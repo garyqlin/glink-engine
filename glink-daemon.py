@@ -31,6 +31,7 @@ from daemon import (
 )
 from daemon import send_alert as _daemon_alert
 from daemon.config import get_default_project
+from daemon.log import C_OK, C_WARN
 
 _set_alert_handler(_daemon_alert)
 
@@ -44,27 +45,27 @@ _REST_PROJECT = {"name": get_default_project()}
 _PLAN_TEMPLATE = """# EXAMPLE workflow — sandbox-builder (沙盒建造游戏)
 # Use this exact format. Adapt the steps for the user's project.
 project:
-  name: sandbox-builder
-  title: 3D沙盒建造游戏
-  goal: Build a Minecraft-style sandbox game
+  name: example-project
+  title: 3D Sandbox Builder
+  goal: Build a demo sandbox game
 steps:
   - id: step-1
-    executor: 重锤
-    fallback_agents: ["标准版"]
+    executor: agent-b
+    fallback_agents: ["default"]
     title: Scene Setup
     task: "Three.js scene + camera + lighting + render loop + OrbitControls"
-    output_file: projects/sandbox-builder/sandbox-builder-step1.html
+    output_file: projects/example-project/step1.html
 
   - id: step-2
-    executor: 重锤
-    fallback_agents: ["标准版"]
+    executor: agent-b
+    fallback_agents: ["default"]
     title: Block Placement
     description: "Implement block placement/removal with raycasting"
-    input_file: projects/sandbox-builder/sandbox-builder-step1.html
-    output_file: projects/sandbox-builder/sandbox-builder-step2.html
+    input_file: projects/example-project/step1.html
+    output_file: projects/example-project/step2.html
     depends_on: [step-1]"""
 
-_ALLOWED_STEP_TYPES = {"regular", "review", "compact"}
+_ALLOWED_STEP_TYPES = {"regular", "review", "compact", "verify"}
 _SHELL_STEP_HELP = "shell-type steps require explicit --allow-shell flag and are not auto-generated"
 
 # 从 bus/__init__.py 导入项目名白名单
@@ -122,22 +123,13 @@ def _validate_plan_steps(steps: list, allow_shell: bool = False) -> list[str]:
                     step[field] = val[:5000]
                     errors.append(f"Step {i + 1}.{field} truncated from {len(val)} to 5000 chars")
 
-        # P0-C: executor 白名单校验
-        known_executors = {
-            "标准版",
-            "扎古",
-            "重锤",
-            "绘墨",
-            "大黄蜂",
-            "Laser",
-            "代码臂",
-            "Forge",
-            "forge",
-            "standard",
-        }
+        # P0-C: executor 白名单校验（从 AGENT_PORTS 动态生成）
+        from bus.agent_client import AGENT_PORTS
+
+        allowed_set = set(AGENT_PORTS.keys()) | {"standard"}
         for i, step in enumerate(steps):
-            executor = step.get("executor", "标准版")
-            if executor not in known_executors:
+            executor = step.get("executor", "standard")
+            if executor not in allowed_set:
                 errors.append(f"Step {i + 1}: executor {executor!r} not in whitelist, falling back to 'standard'")
                 step["executor"] = "standard"
 
@@ -151,7 +143,7 @@ RULES (strict, no exceptions):
 1. Each step MUST have: id, executor, type (optional, default: regular), title, task
 2. Only use these fields per step: id, executor, fallback_agents, title, task, description, input_file, output_file, depends_on, type, optional, command (for shell type)
 3. For incremental builds: step-2 depends_on step-1, uses input_file/output_file
-4. Use executors by role: 重锤(engineering/coding), 绘墨(UI/design), 大黄蜂(testing), Laser(final QA)
+4. Use executors by role: e.g. agent-a(coding), agent-b(design), agent-c(testing), agent-d(QA)
 5. First step: NO input_file or depends_on
 6. Last step: type: review for code review
 7. Add type: shell for command-only steps (use command field instead of task)
@@ -174,9 +166,9 @@ Name: {name}
 Generate the YAML now."""
 
     result = call_agent(
-        "标准版",
+        "default",
         f"{_PLAN_SYSTEM_PROMPT}\n\n{prompt}",
-        timeout=180,
+        timeout=None,
     )
 
     if result["status"] == "failed":
@@ -239,8 +231,6 @@ Generate the YAML now."""
 
 
 def run_daemon(project, force=False, start_step=None):
-    from daemon import C_OK, C_WARN
-
     ensure_pid()
     log(f"🚀 Glink Daemon v0.5 | 项目: {project}")
     start_api_server()

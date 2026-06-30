@@ -8,6 +8,7 @@
   - materials/    资料文件
 """
 
+import contextlib
 import json
 import os
 import re
@@ -39,7 +40,16 @@ def project_init(project_id: str, context: str = "") -> dict:
     prog_path = os.path.join(pdir, "progress.json")
     if not os.path.exists(prog_path):
         with open(prog_path, "w") as f:
-            json.dump({"project_id": project_id, "created_at": time.time(), "status": "active", "steps": [], "current_step": None}, f)
+            json.dump(
+                {
+                    "project_id": project_id,
+                    "created_at": time.time(),
+                    "status": "active",
+                    "steps": [],
+                    "current_step": None,
+                },
+                f,
+            )
 
     ev_path = os.path.join(pdir, "events.jsonl")
     if not os.path.exists(ev_path):
@@ -104,11 +114,8 @@ def project_get(project_id: str) -> dict | None:
     prog_path = os.path.join(pdir, "progress.json")
     prog = {}
     if os.path.exists(prog_path):
-        with open(prog_path) as f:
-            try:
-                prog = json.load(f)
-            except json.JSONDecodeError:
-                pass
+        with open(prog_path) as f, contextlib.suppress(json.JSONDecodeError):
+            prog = json.load(f)
 
     ev_path = os.path.join(pdir, "events.jsonl")
     last_event = None
@@ -116,12 +123,30 @@ def project_get(project_id: str) -> dict | None:
         with open(ev_path) as f:
             lines = f.readlines()
         if lines:
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 last_event = json.loads(lines[-1])
-            except json.JSONDecodeError:
-                pass
 
     context = project_read_context(project_id)
     summary = context[:200] + "..." if context and len(context) > 200 else context
 
     return {"project_id": project_id, "progress": prog, "last_event": last_event, "context_summary": summary}
+
+
+def set_result(project_id: str, agent: str, result_summary: str, success: bool = True):
+    """更新项目 progress.json 的 latest_output 字段"""
+    pdir = _glk_path(project_id)
+    os.makedirs(pdir, exist_ok=True)
+    prog_path = os.path.join(pdir, "progress.json")
+    prog = {}
+    if os.path.exists(prog_path):
+        with open(prog_path) as f, contextlib.suppress(json.JSONDecodeError):
+            prog = json.load(f)
+    prog["latest_output"] = {
+        "agent": agent,
+        "result": result_summary[:500],
+        "success": success,
+        "ts": time.time(),
+    }
+    with open(prog_path, "w") as f:
+        json.dump(prog, f, ensure_ascii=False)
+    return {"status": "ok", "project_id": project_id}

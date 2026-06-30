@@ -1,0 +1,133 @@
+project:
+  name: minecraft-v2
+  title: ⛏️ Steve's World v2 — 三维体素游戏全链开发
+  goal: |-
+    合并两版体素游戏的优点，新增自由光标点击行走、自由十字星挖放系统。
+    产出：~/gbase-projects/minecraft-v2/index.html（单一游戏文件，Three.js r174）
+
+global_context: |
+  你是一个游戏开发团队，使用 Three.js r174 开发体素沙盒游戏。
+
+  ## 核心架构
+  - 融合 minecraft-game.html 的 Steve 角色/第三人称/128×128 世界
+  - 融合 voxel-world.html 的 ACESFilmic 材质/PCFSoftShadowMap/MeshStandardMaterial
+  - 新增自由移动十字星光标（非屏幕中心锁定）
+  - 新增 A* 路径搜索点击行走
+  - 新增十字星对准方块挖/放
+  - 12 种方块类型（含金属质感金块/钻石块）
+  - 单一 HTML 文件，importmap 加载 Three.js r174 CDN
+  - 无 Node.js 构建，双击即开
+
+steps:
+  # ── Step 1: 绘墨视觉方案 ──
+  - id: step-1
+    executor: ink
+    title: 🎨 绘墨 — 材质视觉方案
+    stage: step-1
+    on_success: step-2
+    on_failure: step-1
+    max_loops: 2
+    task: |-
+      读取 ~/gbase-projects/minecraft-v2/plan.md，为 Steve's World v2 产出视觉方案。
+
+      需要输出 markdown 文件到 ~/gbase-projects/minecraft-v2/visual-spec.md，包含：
+
+      1. **方块材质参数表**：12种方块各自的颜色(hex)、金属度(0-1)、粗糙度(0-1)、透明度、发光色
+         - 草(多面: 顶绿侧棕)、土、石、木(多面)、叶(半透)、水(透明0.55)、沙、砖、金块(金属闪闪)、钻石(金属透蓝)、玻璃(透明0.3)、TNT
+      2. **光照配置**：DirectionalLight 色温/角度/阴影
+      3. **Steve 角色配色**：头/身/臂/腿 每个部分的颜色
+      4. **场景色调**：背景色、雾化颜色/范围
+      5. **UI 风格**：热键栏、十字星、信息的颜色方案
+    depends_on: []
+
+  # ── Step 2: Lancer CC 核心开发 ──
+  - id: step-2
+    executor: lancer-cc
+    title: 🏗️ Lancer CC — 完整游戏实现
+    stage: step-2
+    on_success: step-3
+    on_failure: step-2
+    max_loops: 3
+    task: |-
+      这是核心开发步骤。
+
+      ## 参考源
+      - 方案文档: ~/gbase-projects/minecraft-v2/plan.md
+      - 视觉方案: ~/gbase-projects/minecraft-v2/visual-spec.md（step-1 产出）
+      - Minecraft 角色参考: /Users/gary/Desktop/minecraft-game.html
+      - 材质渲染参考: /Users/gary/Desktop/工作区/voxel-world.html
+
+      ## 要求
+      - 单一 HTML 文件，输出到 ~/gbase-projects/minecraft-v2/index.html
+      - Three.js r174，importmap CDN
+      - 所有代码内联在 <script type="module">
+
+      ## 功能清单
+      1. **场景渲染**：ACESFilmic tone mapping + PCFSoftShadowMap + 抗锯齿
+      2. **地形**：128×128×40，Simplex FBM 4 octaves，树木随机放置
+      3. **方块**：12种（草/土/石/木/叶/水/沙/砖/金/钻石/玻璃/TNT），InstancedMesh 按类型分批
+      4. **Steve 角色**：BoxGeometry 组装（头/身/臂/腿），第三人称跟随相机，AABB硬碰撞
+      5. **自由光标**：鼠标移动控制十字星位置（不锁定中心），clamp 在屏幕内
+      6. **点击行走**：Ray from camera → crosshair screen pos → 地面交点 → A* 寻路 → 角色行走（4.8 units/s）
+      7. **挖放**：Ray from crosshair → DDA 步进 → 命中方块左键挖/右键放，reach=6.5
+      8. **UI**：热键栏（9格，blur背景）、信息（FPS/坐标）、提示、toast
+      9. **材质表现**：MeshStandardMaterial，金属质感（金/钻石），透明度（水/玻璃），多面（草/木）
+
+      ## 特殊注意
+      - A* 搜索只在 AIR 方块上行走，max 256 nodes，超过则放弃
+      - 自由光标模式下不需要 pointer lock
+      - WASD 打断行走
+      - 碰撞必须硬（不弹）
+      - fencepost/crosshair 要有明显的白色十字
+    depends_on: [step-1]
+    output_file: /Users/gary/gbase-projects/minecraft-v2/index.html
+
+  # ── Step 3: Laser X 代码审计 ──
+  - id: step-3
+    executor: lancer-x
+    type: verify
+    title: 🔍 Laser X — 代码审计
+    stage: step-3
+    on_success: step-4
+    on_failure: step-2
+    max_loops: 2
+    task: |-
+      审计 step-2 产出的 ~/gbase-projects/minecraft-v2/index.html。
+
+      检查维度：
+      1. **安全**：XSS/注入风险（用户输入渲染）
+      2. **性能**：InstancedMesh 使用、内存泄漏、requestAnimationFrame 优化
+      3. **路径搜索**：A* 正确性、边界条件、寻路崩溃
+      4. **碰撞检测**：AABB 逐轴检测是否正确、有无穿墙
+      5. **Three.js API**：是否正确使用（不调用已废弃 API、参数正确）
+      6. **CSS/HTML**：语义化、浏览器兼容、响应式
+      7. **自由光标**：mouse position → ray 转换是否正确
+
+      输出审计报告到 ~/gbase-projects/minecraft-v2/audit.md。
+      每项标注严重级别：CRITICAL / HIGH / MEDIUM / LOW / INFO。
+    depends_on: [step-2]
+    output_file: /Users/gary/gbase-projects/minecraft-v2/audit.md
+
+  # ── Step 4: Forge 精修 ──
+  - id: step-4
+    executor: forge
+    title: 🔥 Forge — 精修收尾
+    stage: step-4
+    on_success: ""
+    on_failure: step-3
+    max_loops: 2
+    task: |-
+      处理 step-2 和 step-3 的产出：
+
+      1. **读取审计报告**：~/gbase-projects/minecraft-v2/audit.md
+      2. **修复问题**：所有 HIGH 及以上问题必须在 ~/gbase-projects/minecraft-v2/index.html 中修复
+      3. **润色**：代码组织、注释、命名规范
+      4. **性能优化**：减少内存分配、优化渲染循环
+      5. **最终验证**：
+         - HTML 语法检查（标签闭合）
+         - 确认单一文件无外部依赖
+         - 确认所有功能可运行
+
+      修复后的 index.html 覆盖源文件。
+      更新 audit.md 标注已修复项。
+    depends_on: [step-3]

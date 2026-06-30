@@ -24,8 +24,8 @@ def execute_step(step, project, context):
     print(f"  描述: {step.get('description', step.get('task', '')[:80])}")
     print(f"{'=' * 60}")
 
-    agent = step.get("executor", "标准版")
-    port = AGENT_PORTS.get(agent, 8420)
+    agent = step.get("executor", "default")
+    port = AGENT_PORTS.get(agent, 8000)
 
     # 构造给 agent 的任务描述
     task = step.get("description") or step.get("task", "")

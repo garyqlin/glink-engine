@@ -1,0 +1,111 @@
+project:
+  name: puzzle-game
+  title: 辰辰的益智小游戏
+  goal: Build a kid-friendly puzzle game for a 7-year-old (辰辰). Single HTML, no deps.
+
+steps:
+- id: step-design
+  executor: 绘墨
+  title: 游戏概念设计
+  task: |
+    为7岁男孩（辰辰）设计一个益智配对游戏（Memory Card Match），输出设计方案：
+
+    🎯 核心玩法：
+    - 经典翻牌配对：4×4 网格，8对动物/水果图案
+    - 翻两张→匹配则消除，不匹配则翻回
+    - 计时 + 步数记录
+
+    🎨 视觉要求（对7岁男孩友好）：
+    - 明亮温暖的色彩（橙/蓝/绿主色调）
+    - 大圆角卡片（至少60×60px触控友好）
+    - Emoji图案（🐶🐱🐼🐸🐰🦊🐻🐯等）——孩子一看就懂
+    - 点击反馈：卡片翻转动画（3D flip效果）
+    - 匹配成功：绿色光晕 + 🎉动画
+    - 完成：彩色纸屑庆祝 + 显示成绩
+
+    🎮 交互体验：
+    - 大按钮，适合小手点击
+    - 音效反馈（Web Audio API，不用外部文件）
+    - 重新开始按钮
+    - 最佳成绩记录（localStorage）
+
+    📱 适配：
+    - iPad/手机/电脑全适配
+    - 触摸友好
+
+    输出设计方案到 projects/puzzle-game/design.md
+
+- id: step-dev
+  executor: Lancer CC
+  title: 游戏开发实现
+  fallback_agents:
+  - 重锤
+  description: |
+    基于设计方案，开发完整的 Memory Card Match 游戏。
+
+    技术要求：
+    - 纯 HTML + CSS + JavaScript，单文件无依赖
+    - 4×4 网格，使用 emoji 做图案
+    - 3D CSS flip 动画（perspective + rotateY）
+    - Web Audio API 生成翻转/匹配/胜利音效
+    - 响应式设计，iPad/手机/桌面全适配
+    - localStorage 保存最高分
+    - 匹配成功动画 + 完成时🎊效果
+
+    直接用 emoji 做卡片图案，不要用图片文件。
+    最终产出：projects/puzzle-game/index.html
+  output_file: projects/puzzle-game/index.html
+  gate:
+    type: file_exists
+    path: projects/puzzle-game/index.html
+    min_bytes: 5000
+
+- id: step-verify
+  executor: Laser
+  title: 代码审查
+  description: |
+    审查游戏 HTML 文件：
+    - 语法是否正确（HTML/CSS/JS）
+    - 是否无外部依赖（CDN? 外部图片?）
+    - 交互是否完整（翻牌→匹配→消除→胜利→重来）
+    - 移动端触摸是否正常
+    - 是否有音效反馈
+    - localStorage 是否正确使用
+    输出审查报告到 projects/puzzle-game/review.md
+
+- id: step-polish
+  executor: Forge
+  title: 精修优化
+  description: |
+    基于审查报告优化游戏：
+    - 修复所有审查发现的问题
+    - 润色动画效果（更顺滑的翻转、匹配光晕）
+    - 优化移动端触摸体验
+    - 确保所有功能完整可用
+  input_file: projects/puzzle-game/index.html
+  output_file: projects/puzzle-game/index.html
+  gate:
+    type: output_contains
+    pattern: "flip|transform.*rotateY|Backface"
+  depends_on:
+  - step-verify
+  max_loops: 2
+
+- id: step-final-gate
+  executor: Laser
+  type: review
+  title: 终审门禁
+  description: |
+    最终验收：
+    1. index.html 存在且非空
+    2. 无外部依赖
+    3. 翻牌匹配玩法完整
+    4. 适合7岁儿童的视觉风格
+    5. 响应式布局适配
+    输出最终验收结论。
+  depends_on:
+  - step-polish
+  gate:
+    type: script
+    command: "test -f projects/puzzle-game/index.html && wc -c < projects/puzzle-game/index.html | awk '{if($1 > 5000) exit 0; else exit 1}'"
+    timeout: 5

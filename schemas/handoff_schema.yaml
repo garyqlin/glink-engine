@@ -1,0 +1,65 @@
+# Handoff Schema 定义
+# Agent 间交接棒的标准格式
+# 缺字段 = 系统当场打回
+
+handoff:
+  description: "Agent 之间传递任务成果的结构化交接文档"
+
+  required_fields:
+    - status
+    - summary
+    - evidence
+
+  optional_fields:
+    - errors
+    - next_step
+    - metrics
+    - metadata
+
+  field_definitions:
+    status:
+      type: string
+      required: true
+      enum: ["success", "failure", "partial"]
+      description: "任务执行状态"
+
+    summary:
+      type: string
+      required: true
+      max_length: 1000
+      description: "执行结果摘要"
+
+    evidence:
+      type: array
+      required: true
+      item_type: string
+      min_items: 0
+      description: "交付物文件路径列表（支持 glob）"
+
+    errors:
+      type: array
+      required: false
+      item_type: object
+      properties:
+        - name: type
+          type: string
+        - name: message
+          type: string
+        - name: recoverable
+          type: boolean
+      description: "错误详情列表"
+
+    next_step:
+      type: string
+      required: false
+      description: "建议的下一个节点/步骤"
+
+    metrics:
+      type: object
+      required: false
+      description: "可选的量化指标（耗时/数量等）"
+
+    metadata:
+      type: object
+      required: false
+      description: "上下文元数据"

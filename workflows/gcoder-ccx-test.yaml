@@ -1,0 +1,50 @@
+# ══════════════════════════════════════════════════════════
+# Gcoder CC / X 编排测试
+# 工作流：X 审查 → CC 修改 → X 再审查
+# ══════════════════════════════════════════════════════════
+project:
+  name: gcoder-ccx-test
+  title: Gcoder CC/X 编排验证
+  goal: 验证 Glink 能正确编排 CC(8441) 和 X(8442) 的协同工作流
+  mode: serial
+
+steps:
+  - id: step-x-review
+    executor: X
+    title: "X 审查代码质量"
+    task: >
+      审查 /tmp/glink-test/hello.py 文件的代码质量。
+      要求：
+      1. 用 search_code 搜索当前目录中是否有类似函数
+      2. 用 read_file 读取 hello.py 内容
+      3. 给出代码质量评估报告
+      输出评估结果到 /tmp/glink-test/x-review-report.md
+
+  - id: step-cc-edit
+    executor: CC
+    title: "CC 修改代码添加更多功能"
+    task: >
+      编辑 /tmp/glink-test/hello.py 文件。
+      要求：
+      1. 先用 read_file 读取文件内容
+      2. 添加一个 farewell 函数
+      3. 添加输入验证（name 不能为空）
+      4. 添加 main() 函数入口
+      输出修改后的文件到 /tmp/glink-test/hello.py
+    depends_on: [step-x-review]
+    input_file: /tmp/glink-test/hello.py
+    output_file: /tmp/glink-test/hello.py
+
+  - id: step-x-verify
+    executor: X
+    title: "X 验证修改结果"
+    task: >
+      验证 CC 对 /tmp/glink-test/hello.py 的修改效果。
+      要求：
+      1. 用 read_file 读取修改后的内容
+      2. 用 exec_command 运行脚本验证输出正确性
+      3. 如果发现 bug，用 edit_lines 修正
+      4. 输出最终验证报告到 /tmp/glink-test/x-verify-report.md
+    depends_on: [step-cc-edit]
+    input_file: /tmp/glink-test/hello.py
+    output_file: /tmp/glink-test/x-verify-report.md

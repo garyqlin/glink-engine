@@ -1,0 +1,98 @@
+project:
+  name: gcoder-phase1
+  title: Gcoder 调研阶段 — 需求分析 + 技术方案
+  goal: 战甲并行产出需求文档和技术调研文档，为正规开发文档奠定基础
+  mode: parallel
+
+steps:
+  # ═══════════════════════════════════════════════
+  # Phase 1: 调研（5 战甲并行，各自产出独立文档）
+  # ═══════════════════════════════════════════════
+
+  - id: research-heavy-hammer
+    executor: 重锤
+    title: "重锤调研 — 核心功能与工程实现"
+    task: >
+      调研一个 AI 编程 Agent（对标 Claude Code / Codex）的核心工程实现。
+      参考材料：/Users/gary/opprime/research/gcoder-reference-study.md
+      输出文件：/Users/gary/opprime/gcoder/research/hammer-core-engineering.md
+      
+      请回答以下问题并形成文档：
+      
+      1. Claude Code 的精确 Edit 方案如何实现？（diff/patch vs 全文件重写）
+      2. Codex 的沙箱（sandboxing）机制——在本地做还是在隔离环境做？
+      3. 工具注册与调用：Claude Code 的 6 工具集 vs Codex 的 12 skill 设计
+      4. GBase 已有的 kernel.py/session.py/toolkit.py 哪些可以复用，哪些需要重写？
+      5. 项目感知：如何读取项目结构、git 历史、已有约定文件？
+      6. 工作流执行（7 阶段：探索→设计→实现→审查→测试→提交→文档）的工程落地方案
+      7. 对比自身（重锤）的工程经验，给出 Gcoder 的模块划分建议
+      
+      输出为结构化的技术调研文档，每点至少 200 字分析。
+
+  - id: research-ink
+    executor: 绘墨
+    title: "绘墨调研 — 用户体验与交互设计"
+    task: >
+      调研一个 AI 编程 Agent（对标 Claude Code / Codex）的用户体验和交互设计。
+      参考材料：/Users/gary/opprime/research/gcoder-reference-study.md
+      输出文件：/Users/gary/opprime/gcoder/research/ink-ux-design.md
+      
+      1. 终端交互模式：单任务模式（gcoder "xxx"）vs 对话模式（gcoder），哪种场景用哪种？
+      2. 人类如何与 Gcoder 协作？流程图（从说需求到拿到代码的完整交互链路）
+      3. 异常处理 UX：编译错误、测试失败、冲突解决——如何向人类清晰呈现？
+      4. 进度反馈：长任务（>30s）如何给用户实时反馈？
+      5. 对比 Claude Code 和 Codex 的交互模式，设计 Gcoder 的 CLI 交互规范
+      6. 错误恢复：人类说"不对重做"时的工作流
+      
+      重点是体验设计，不是工程实现。输出结构化文档，每点至少 200 字。
+
+  - id: research-bumblebee
+    executor: 大黄蜂
+    title: "大黄蜂调研 — 可观测性、部署与质量保障"
+    task: >
+      调研一个 AI 编程 Agent（对标 Claude Code / Codex）的可观测性、部署方案和质量保障体系。
+      参考材料：/Users/gary/opprime/research/gcoder-reference-study.md
+      输出文件：/Users/gary/opprime/gcoder/research/bumblebee-ops-quality.md
+      
+      1. 日志与追踪：每次代码改动如何追踪？可回滚的原子操作设计
+      2. 测试策略：Gcoder 如何确保自己生成的代码是正确的？
+      3. 部署方案：Gcoder 是 Docker、CLI 还是什么形式发布？
+      4. 速率控制：API 调用频率（LLM）、文件操作频率如何控制？
+      5. 冲突检测：当人类也在编辑文件时，Gcoder 如何发现并处理冲突？
+      6. 安全边界：客户项目代码安全（不泄露、不误删、不改没授权的文件）
+      7. 容错与恢复：LLM 幻觉导致错误代码，如何发现和回滚？
+      
+      输出结构化文档，每点至少 200 字。
+
+  - id: research-laser
+    executor: Laser
+    title: "Laser 调研 — 白盒安全、质量门禁与代码审查体系"
+    task: >
+      调研 AI 编程 Agent 的白盒安全规范、质量门禁和代码审查体系。
+      参考材料：/Users/gary/opprime/research/gcoder-reference-study.md
+      输出文件：/Users/gary/opprime/gcoder/research/laser-security-quality.md
+      
+      1. 代码质量门禁：Gcoder 改代码前、改后应做什么检查？（ruff / mypy / pre-commit）
+      2. 安全红线：Gcoder 哪些事绝对不能做？（eval / exec / 系统文件写入 / 网络请求）
+      3. 幻觉检测：如何检测 LLM 生成的代码中可能的幻觉？
+      4. 文件操作审计：Gcoder 修改了哪些文件、改了什么、能否回滚
+      5. 引用/import 验证：Gcoder 不能凭空发明不存在的模块或 API
+      6. Gcoder 自身代码质量要求：它自己的代码也要通过哪些审计？
+      
+      重点是可执行的门禁规则，不是空泛分析。每条给出具体的检查方法。
+
+  - id: research-forge
+    executor: 大黄蜂
+    title: "Forge 调研 — 端到端黑盒测试与场景验证"
+    task: >
+      调研 AI 编程 Agent 的端到端黑盒测试方案和场景验证方法。
+      注意：Forge 战甲目前是 Bumblebee 身份（8434），但以测试者视角执行。
+      输出文件：/Users/gary/opprime/gcoder/research/forge-e2e-testing.md
+      
+      1. 测试场景：Gcoder 的核心 5 个使用场景（创建项目、加功能、修bug、重构、审查）
+      2. 端到端测试方法：如何自动化测试一个 AI 程序员？
+      3. 验收标准：什么算一个任务"完成"了？（代码改好了 + 测试过了 + lint 过了 + 提交了）
+      4. 回归检测：Gcoder 没改的文件/功能不应该受影响，怎么保证？
+      5. 边界测试：超大文件、超复杂项目、多语言项目场景测试
+      
+      输出结构化文档，每点至少 200 字。

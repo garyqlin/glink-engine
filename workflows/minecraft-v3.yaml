@@ -1,0 +1,240 @@
+name: minecraft-v3
+version: 0.1.0
+description: ⛏️ Minecraft — 迭代流水线 (sandbox-builder 模式)
+
+global_context: |
+  ## 技术栈
+  - Three.js r174 (CDN unpkg), importmap
+  - 单 HTML 文件，双击即玩
+  - 第一人称体素沙盒游戏
+  
+  ## 所有步骤遵守
+  - 单 HTML 文件，所有代码内联 <script type="module">
+  - CDN: three.module.js r174 + OrbitControls
+  - // === SECTION === 注释分隔代码块
+  - 中文注释
+  
+  ## 🚫 铁律（有 input_file 的步骤）
+  - 完整阅读 input_file 代码
+  - 保留所有已有功能、结构、变量、CSS 样式、事件绑定
+  - 只添加新功能，不重写已有代码
+  - 代码将被自动保存到 output_file
+
+steps:
+  # ── Step 1: 场景 + 光照 + 渲染器 ──
+  - id: step-1
+    executor: 标准版
+    fallback_agents: ["标准版"]
+    title: 场景初始化
+    description: Three.js 场景 + 相机 + 光照 + 渲染循环 + 天空
+    output_file: projects/minecraft-v3/step-1.html
+    task: |
+      创建 Minecraft HTML 文件基础结构。
+      
+      ## 必须实现
+      1. Three.js r174 场景 (importmap CDN unpkg)
+      2. 第一人称相机: PerspectiveCamera(60, ratio, 0.1, 200)
+      3. 相机位置 (10, 8, 10) 俯视
+      4. AmbientLight(0x404040, 0.6) + DirectionalLight 阴影
+      5. WebGLRenderer: antialias, shadowMap.enabled=true, PCFSoftShadowMap
+      6. 天空色: 0x87CEEB, Fog(0x87CEEB, 30, 150)
+      7. 地面平面: PlaneGeometry(100, 100), 绿色
+      8. resize 事件绑定
+      9. OrbitControls (开发用，方便测试)
+      10. animate() 循环
+      
+      ## 样式
+      body { margin:0; overflow:hidden; }
+      
+      ## 输出
+      完整可运行 HTML
+
+  # ── Step 2: 地形生成 ──
+  - id: step-2
+    executor: 重锤
+    fallback_agents: ["标准版"]
+    title: 地形生成
+    description: 体素地形 + 方块系统
+    output_file: projects/minecraft-v3/step-2.html
+    input_file: projects/minecraft-v3/step-1.html
+    task: |
+      ## 修改 — 在已有场景中添加体素地形
+      
+      ### 1. 方块系统
+      - 方块尺寸 1×1×1
+      - 方块类型:
+        grass (顶绿 #7CB342, 侧棕 #8D6E63)
+        dirt (#8D6E63)
+        stone (#9E9E9E)
+        wood (#795548)
+      - 每条方块存储: { mesh, type, x, y, z, transparent? }
+      - 方块数组 blocks[]
+      
+      ### 2. 地形生成
+      - noise3D + octaveNoise (4 八度, 频率 0.01/0.02/0.04/0.08)
+      - 64×64 世界, 高度 1~8
+      - 最高一层 grass, 下面 dirt×3, 再下面 stone
+      
+      ### 3. 将方块添加到场景
+      - 每个方块 BoxGeometry + MeshStandardMaterial
+      - 所有方块 castShadow + receiveShadow
+      - 如果方块多 (>2000), 使用 InstancedMesh 分组优化
+
+    depends_on: [step-1]
+
+  # ── Step 3: 玩家控制 ──
+  - id: step-3
+    executor: 重锤
+    fallback_agents: ["标准版"]
+    title: 玩家控制
+    description: 第一人称 WASD + PointerLock + 重力 + 碰撞
+    output_file: projects/minecraft-v3/step-3.html
+    input_file: projects/minecraft-v3/step-2.html
+    task: |
+      ## 修改 — 在已有地形上添加玩家控制
+      
+      ### 移除 OrbitControls，添加第一人称控制
+      
+      ### 1. 指针锁定
+      - 点击画面 → pointer lock
+      - ESC → 解锁
+      - canvas 光标: crosshair
+      
+      ### 2. 键盘控制 (WASD)
+      - W/↑: 前进, S/↓: 后退, A/←: 左移, D/→: 右移
+      - Space: 跳跃 (有重力)
+      - Shift: 下蹲 (降低一半高度)
+      - 移动速度 4.3 units/s, 冲刺 6.0 units/s
+      
+      ### 3. 重力 + 碰撞
+      - 重力 -20 units/s²
+      - AABB 碰撞检测: player 1.8高 × 0.6宽 × 0.6深
+      - 与所有方块逐轴碰撞
+      - 站在方块上
+      
+      ### 4. 相机跟随
+      - 相机在玩家头部位置 (y + 1.6)
+      - 鼠标控制俯仰/偏航
+      - 俯仰限制 ±90°
+
+    depends_on: [step-2]
+
+  # ── Step 4: 挖放方块 ──
+  - id: step-4
+    executor: 重锤
+    fallback_agents: ["标准版"]
+    title: 方块交互
+    description: Raycasting + 挖放 + 热键栏
+    output_file: projects/minecraft-v3/step-4.html
+    input_file: projects/minecraft-v3/step-3.html
+    task: |
+      ## 修改 — 添加方块交互系统
+      
+      ### 1. 十字准心
+      - 画面中心白色十字 (+)
+      - CSS 定位，不受 pointer lock 影响
+      
+      ### 2. 挖方块 (左键)
+      - Raycaster from camera center
+      - DDA 步进算法检测命中方块
+      - 有效距离: 6.5 units
+      - 左键: 移除命中方块 (从 scene + blocks[] 中删除)
+      - 挖方块动画: 方块高亮边框 (outline)
+      
+      ### 3. 放方块 (右键)
+      - 在命中方块相邻面放置新方块
+      - 放置位置: Math.round(hit.x + normal.x, hit.y + normal.y, hit.z + normal.z)
+      - 不能放在玩家所在位置 (碰撞检查)
+      - 右键自动放置当前选中的方块类型
+      
+      ### 4. 热键栏 (hotbar)
+      - 屏幕底部 9 格 UI
+      - 半透明黑色背景, 白色边框
+      - 选中格高亮 (白色背景)
+      - 数字键 1-9 选择方块类型
+      - 鼠标滚轮切换
+      - 方块类型: grass, dirt, stone, wood, brick(红色), glass(透明)
+      
+      ### 5. 方块高亮
+      - 准心对准的方块显示白色半透明边框
+
+    depends_on: [step-3]
+
+  # ── Step 5: 游戏循环 ──
+  - id: step-5
+    executor: 重锤
+    fallback_agents: ["标准版"]
+    title: 游戏循环
+    description: 昼夜循环 + HUD + 生命/饥饿 + 物品栏
+    output_file: projects/minecraft-v3/step-5.html
+    input_file: projects/minecraft-v3/step-4.html
+    task: |
+      ## 修改 — 添加游戏循环和 UI
+      
+      ### 1. 昼夜循环
+      - 每 20 分钟一个完整日夜循环
+      - 太阳: DirectionalLight 绕 XZ 轴旋转 (角度随时间变化)
+      - 天空色渐变: 白天 0x87CEEB → 日落 0xFF6B35 → 夜晚 0x0A0A2E → 日出
+      - 夜晚: 环境光变暗, 添加月光
+      - Fog 颜色随天空变化
+      
+      ### 2. HUD
+      - 左上角: FPS / 坐标 / 方块总数
+      - 左下角: 生命值 ❤️❤️❤️❤️❤️❤️❤️❤️❤️❤️ (10 心)
+      - 右下角: 饥饿值 🍗🍗🍗🍗🍗🍗🍗🍗🍗🍗 (10 鸡腿)
+      - 饥饿值随时间缓慢下降
+      - 饥饿值 = 0 时生命值开始下降
+      
+      ### 3. 物品栏 (inventory)
+      - 按 E 打开/关闭
+      - 网格布局 (3×9)
+      - 已有方块类型显示
+      - 选中可放置到热键栏
+      - 半透明背景
+
+    depends_on: [step-4]
+
+  # ── Step 6: 生物 + 最终打磨 ──
+  - id: step-6
+    executor: 重锤
+    fallback_agents: ["标准版"]
+    title: 最终打磨
+    description: 生物 + 音效 + 优化 + 最终文件
+    output_file: projects/minecraft-v3/index.html
+    input_file: projects/minecraft-v3/step-5.html
+    task: |
+      ## 修改 — 添加生物和最终打磨
+      
+      ### 1. 动物 (被动生物)
+      - 羊: BoxGeometry 组装 (白身, 黑脸, 4腿)
+      - 牛: BoxGeometry 组装 (棕身, 4腿, 角)
+      - 鸡: 小 BoxGeometry (黄身, 红冠)
+      - 动物在地形表面随机生成
+      - 动物随机漫步 (AI: 选方向→走几步→停→再选)
+      - 动物碰撞箱
+      
+      ### 2. 僵尸 (敌对生物)
+      - 绿色 BoxGeometry 组装
+      - 夜晚从地形表面生成
+      - 向玩家缓慢移动 (1.5 units/s)
+      - 碰撞伤害
+      - 白天阳光下燃烧消失
+      
+      ### 3. 音频 (Web Audio API)
+      - 挖方块: 短促 break 音效 (方波合成)
+      - 放方块: 短促 place 音效
+      - 受伤: 短促 oof 音效
+      - 跳: 轻弹音效
+      - 不需要外部音频文件, 用 OscillatorNode 合成
+      
+      ### 4. 游戏结束
+      - 生命值 = 0 → 死亡
+      - 显示 "Game Over" + 重生按钮
+      - 重生: 重置位置 + 满血 + 保留方块世界
+      
+      ### 5. 性能优化
+      - 视锥裁剪 (只渲染相机视野内的方块)
+      - 远处方块简化 (LOD)
+      - 删除不可见方块内部的面 (面裁剪)
+
+    depends_on: [step-5]

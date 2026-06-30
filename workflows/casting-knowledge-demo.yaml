@@ -1,0 +1,48 @@
+project:
+  name: casting-knowledge-demo
+  title: 铸件缺陷知识卡片项目
+  goal: 全员战甲协同演示 — 搜索资料 → 提炼知识 → 生成卡片 → 审计质量
+steps:
+  - id: step-1
+    executor: agent-a
+    title: 搜索铸件缺陷资料
+    task: "搜索『熔模铸件缺陷 类型 原因 对策』，输出10种常见缺陷的名称、原因和解决方案摘要，保存到 bus"
+
+  - id: step-2
+    executor: agent-b
+    title: 生成知识表格
+    task: "基于step-1的输出，用python生成结构化的缺陷知识表格，包含：缺陷名称、图片描述、典型原因、对策方案"
+    output_file: projects/casting-knowledge-demo/defect-table.txt
+    depends_on: [step-1]
+
+  - id: step-3
+    executor: agent-x
+    title: 审计知识准确性
+    task: "审计step-2输出的知识表格：检查铸造术语准确性、数据完整性、格式规范性"
+    depends_on: [step-2]
+
+  - id: step-4
+    executor: agent-d
+    title: 设计知识卡片HTML
+    task: "基于step-2的知识表格，设计一个美观的知识卡片HTML页面，中文，响应式布局，一页一张卡片"
+    output_file: projects/casting-knowledge-demo/knowledge-cards.html
+    depends_on: [step-2]
+
+  - id: step-5
+    executor: agent-y
+    title: 生成PDF知识手册
+    task: "基于step-2的表格和step-3的审计结果，生成一份PDF知识手册"
+    output_file: projects/casting-knowledge-demo/manual.pdf
+    depends_on: [step-2, step-3]
+
+  - id: step-6
+    executor: agent-z
+    title: 审计全部产出
+    task: "审计step-4(HTML)和step-5(PDF)的完整性和质量，给出改进建议"
+    depends_on: [step-4, step-5]
+
+  - id: step-7
+    executor: agent-e
+    title: 最终总结汇报
+    task: "综合以上所有步骤的结果，给主人写一份项目总结报告"
+    depends_on: [step-6]

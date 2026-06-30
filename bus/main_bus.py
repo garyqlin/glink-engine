@@ -17,11 +17,17 @@ Main Bus — 共享项目时间线
 import fcntl
 import json
 import os
+import re
 import sys
 import threading
 from datetime import datetime
 
-from . import sanitize_project_name
+_PROJECT_NAME_CLEAN = re.compile(r"[^\w\-]")
+
+
+def sanitize_project_name(name: str) -> str:
+    return _PROJECT_NAME_CLEAN.sub("", name)
+
 
 # Reporter 延迟导入以避免循环依赖；仅在 write 失败时用于告警
 _send_alert = None
